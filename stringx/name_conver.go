@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charlienet/go-datastructures/maps"
 	"github.com/charlienet/misc/bytesconv"
+	"github.com/charlienet/misc/internal/maps"
 	"github.com/charlienet/misc/pool"
 )
 
