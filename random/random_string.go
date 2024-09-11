@@ -1,6 +1,6 @@
 package random
 
-import "github.com/charlienet/misc/bytesconv"
+import "github.com/charlienet/go-misc/bytesconv"
 
 const (
 	uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

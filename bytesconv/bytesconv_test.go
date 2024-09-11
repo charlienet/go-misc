@@ -3,7 +3,7 @@ package bytesconv_test
 import (
 	"testing"
 
-	"github.com/charlienet/misc/bytesconv"
+	"github.com/charlienet/go-misc/bytesconv"
 )
 
 func BenchmarkStringToBytes(b *testing.B) {

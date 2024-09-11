@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charlienet/misc/locker"
+	"github.com/charlienet/go-misc/locker"
 )
 
 func TestLock(t *testing.T) {

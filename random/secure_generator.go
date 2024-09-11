@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"math/big"
 
-	"github.com/charlienet/misc/bytesconv"
+	"github.com/charlienet/go-misc/bytesconv"
 )
 
 type secureRandGenerator struct{}

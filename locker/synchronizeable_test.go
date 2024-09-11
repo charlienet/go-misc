@@ -3,7 +3,7 @@ package locker_test
 import (
 	"testing"
 
-	"github.com/charlienet/misc/locker"
+	"github.com/charlienet/go-misc/locker"
 )
 
 func TestLocker(t *testing.T) {

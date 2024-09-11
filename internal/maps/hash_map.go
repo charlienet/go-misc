@@ -3,7 +3,7 @@ package maps
 import (
 	"maps"
 
-	"github.com/charlienet/misc/locker"
+	"github.com/charlienet/go-misc/locker"
 )
 
 type hashmap[M ~map[K]V, K comparable, V any] struct {

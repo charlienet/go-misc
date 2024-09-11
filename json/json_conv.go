@@ -3,8 +3,8 @@ package json
 import (
 	"regexp"
 
-	"github.com/charlienet/misc/bytesconv"
-	"github.com/charlienet/misc/stringx"
+	"github.com/charlienet/go-misc/bytesconv"
+	"github.com/charlienet/go-misc/stringx"
 )
 
 var (

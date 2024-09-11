@@ -1,4 +1,4 @@
-module github.com/charlienet/misc
+module github.com/charlienet/go-misc
 
 go 1.23
 

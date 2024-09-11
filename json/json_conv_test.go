@@ -3,7 +3,7 @@ package json_test
 import (
 	"testing"
 
-	"github.com/charlienet/misc/json"
+	"github.com/charlienet/go-misc/json"
 )
 
 func TestSerialize(t *testing.T) {

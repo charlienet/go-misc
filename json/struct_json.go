@@ -1,6 +1,6 @@
 package json
 
-import "github.com/charlienet/misc/bytesconv"
+import "github.com/charlienet/go-misc/bytesconv"
 
 // MustStruct2JsonIndent 结构转换为带格式字符串
 func MustStruct2JsonIndent(obj any) string {

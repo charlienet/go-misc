@@ -6,9 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charlienet/misc/bytesconv"
-	"github.com/charlienet/misc/internal/maps"
-	"github.com/charlienet/misc/pool"
+	"github.com/charlienet/go-misc/bytesconv"
+	"github.com/charlienet/go-misc/internal/maps"
+	"github.com/charlienet/go-misc/pool"
 )
 
 // CamelCase 		userName
