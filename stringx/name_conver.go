@@ -75,7 +75,7 @@ func Pascal2UpperSnake(name string) string {
 		return name
 	}
 
-	if r, ok := pascal2snake.Get(name); ok {
+	if r, ok := pascal2upperSnake.Get(name); ok {
 		return r
 	}
 
