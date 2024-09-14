@@ -2,6 +2,11 @@ package pool
 
 import "sync"
 
+type Pool[T any] interface {
+	Get() T
+	Put(T)
+}
+
 type pool[T any] struct {
 	i *sync.Pool
 }
