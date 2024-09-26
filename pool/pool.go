@@ -1,25 +1,29 @@
 package pool
 
-import "sync"
-
-type pool[T any] struct {
-	i *sync.Pool
+type Pool[T any] struct {
+	c   chan T
+	new func() T
 }
 
-func New[T any](new func() T) pool[T] {
-	return pool[T]{
-		i: &sync.Pool{
-			New: func() any {
-				return new()
-			},
-		},
+func New[T any](size int, f func() T) *Pool[T] {
+	return &Pool[T]{
+		c:   make(chan T, size),
+		new: f,
 	}
 }
 
-func (p pool[T]) Get() T {
-	return p.i.Get().(T)
+func (p *Pool[T]) Get() (b T) {
+	select {
+	case b = <-p.c:
+	default:
+		b = p.new()
+	}
+	return
 }
 
-func (p pool[T]) Put(t T) {
-	p.i.Put(t)
+func (p *Pool[T]) Put(b T) {
+	select {
+	case p.c <- b:
+	default:
+	}
 }

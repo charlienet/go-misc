@@ -188,7 +188,7 @@ func toLower(s byte) byte {
 	return s
 }
 
-var p = pool.New(func() []string {
+var p = pool.New(10, func() []string {
 	return make([]string, 8)
 })
 
