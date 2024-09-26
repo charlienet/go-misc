@@ -1,8 +1,6 @@
 package stringx
 
 import (
-	"bytes"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -62,12 +60,6 @@ func Pascal2Snake(name string) string {
 	pascal2snake.Set(name, s)
 
 	return s
-}
-
-var wordBarrierRegex = regexp.MustCompile(`(\w)([A-Z])`)
-
-func Pascal2Snake2(name string) string {
-	return string(bytes.ToLower(wordBarrierRegex.ReplaceAll([]byte(name), []byte("${1}_${2}"))))
 }
 
 func Pascal2UpperSnake(name string) string {

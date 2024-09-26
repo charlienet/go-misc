@@ -200,12 +200,6 @@ func BenchmarkTransform(b *testing.B) {
 		}
 	})
 
-	b.Run("Pascal2Snake2", func(b *testing.B) {
-		for n := 0; n < b.N; n++ {
-			Pascal2Snake2("UpdatedAt")
-		}
-	})
-
 	b.Run("Pascal2UpperSnake", func(b *testing.B) {
 		for n := 0; n < b.N; n++ {
 			Pascal2UpperSnake("UpdatedAt")
