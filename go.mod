@@ -1,14 +1,13 @@
 module github.com/charlienet/go-misc
 
-go 1.23
+go 1.24
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
-	github.com/charlienet/go-mixed v0.5.1
 	github.com/json-iterator/go v1.1.12
-	github.com/shopspring/decimal v1.3.1
+	github.com/shopspring/decimal v1.4.0
 	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/tjfoc/gmsm v1.4.1
 )
 
