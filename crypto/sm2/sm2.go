@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 
+	"github.com/charlienet/go-misc/bytesconv"
 	s "github.com/tjfoc/gmsm/sm2"
 	x "github.com/tjfoc/gmsm/x509"
 )
@@ -84,15 +85,15 @@ func New(opts ...option) (*sm2Instance, error) {
 	return o, nil
 }
 
-func (o *sm2Instance) Encrypt(msg []byte) ([]byte, error) {
+func (o *sm2Instance) Encrypt(msg []byte) (bytesconv.BytesResult, error) {
 	return s.Encrypt(o.puk, msg, rand.Reader, o.mode)
 }
 
-func (o *sm2Instance) Decrypt(cipherText []byte) ([]byte, error) {
+func (o *sm2Instance) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
 	return s.Decrypt(o.prk, cipherText, o.mode)
 }
 
-func (o *sm2Instance) Sign(msg []byte) ([]byte, error) {
+func (o *sm2Instance) Sign(msg []byte) (bytesconv.BytesResult, error) {
 	if o.prk == nil {
 		return []byte{}, errors.New("private key is nil")
 	}
