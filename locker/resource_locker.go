@@ -2,67 +2,86 @@ package locker
 
 import "sync"
 
-const lockPoolSize = 128
-
-type lockPool struct {
-	pool sync.Pool
+type lockEntry struct {
+	mu       *sync.Mutex
+	refCount int
 }
 
-func newLockPool() *lockPool {
-	return &lockPool{
+type ResourceLocker struct {
+	globalMu sync.Mutex
+	locks    sync.Map
+	pool     sync.Pool
+}
+
+func NewResourceLocker() *ResourceLocker {
+	return &ResourceLocker{
 		pool: sync.Pool{
-			New: func() interface{} {
-				return new(sync.Mutex)
+			New: func() any {
+				return &lockEntry{
+					mu: &sync.Mutex{},
+				}
 			},
 		},
 	}
 }
 
-func (p *lockPool) get() *sync.Mutex {
-	return p.pool.Get().(*sync.Mutex)
-}
-
-func (p *lockPool) put(l *sync.Mutex) {
-	p.pool.Put(l)
-}
-
-type ResourceLocker struct {
-	locks sync.Map
-	pool  *lockPool
-}
-
-func NewResourceLocker() *ResourceLocker {
-	return &ResourceLocker{
-		pool: newLockPool(),
-	}
-}
-
 func (rl *ResourceLocker) Lock(key string) {
-	lock, _ := rl.locks.LoadOrStore(key, rl.pool.get())
-	mutex := lock.(*sync.Mutex)
-	mutex.Lock()
+	rl.globalMu.Lock()
+
+	entry, loaded := rl.locks.Load(key)
+	if !loaded {
+		entry = rl.pool.Get()
+		entry.(*lockEntry).refCount = 0
+		rl.locks.Store(key, entry)
+	}
+
+	entryPtr := entry.(*lockEntry)
+	entryPtr.refCount++
+
+	rl.globalMu.Unlock()
+	entryPtr.mu.Lock()
 }
 
 func (rl *ResourceLocker) Unlock(key string) {
-	lock, exists := rl.locks.Load(key)
+	entry, exists := rl.locks.Load(key)
 	if !exists {
 		panic("unlocking a non-locked resource")
 	}
 
-	mu := lock.(*sync.Mutex)
-	mu.Unlock()
-	rl.cleanupLock(key, mu)
+	entryPtr := entry.(*lockEntry)
+	entryPtr.mu.Unlock()
+	rl.globalMu.Lock()
+	defer rl.globalMu.Unlock()
+
+	entryPtr.refCount--
+	if entryPtr.refCount == 0 {
+		rl.locks.Delete(key)
+
+		entryPtr.refCount = 0
+		rl.pool.Put(entry)
+	}
 }
 
-func (rl *ResourceLocker) cleanupLock(key string, mu *sync.Mutex) {
-	lock, exist := rl.locks.Load(key)
-	if !exist {
-		return
+func (rl *ResourceLocker) TryLock(key string) bool {
+	rl.globalMu.Lock()
+	defer rl.globalMu.Unlock()
+
+	// 尝试加载现有条目
+	entry, loaded := rl.locks.Load(key)
+	if !loaded {
+		// 从池中获取新条目
+		entry = rl.pool.Get()
+		entry.(*lockEntry).refCount = 0
+		rl.locks.Store(key, entry)
 	}
 
-	if lock.(*sync.Mutex) != mu {
-		if rl.locks.CompareAndDelete(key, mu) {
-			rl.pool.put(mu)
-		}
+	entryPtr := entry.(*lockEntry)
+
+	// 尝试获取锁
+	if !entryPtr.mu.TryLock() {
+		return false
 	}
+
+	entryPtr.refCount++
+	return true
 }
