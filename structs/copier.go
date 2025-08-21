@@ -3,6 +3,7 @@ package structs
 import (
 	"maps"
 	"reflect"
+	"strings"
 )
 
 // struct -> map
@@ -36,7 +37,6 @@ func copier(dst, src any, opt options) error {
 	if from.Kind() == reflect.Map && to.Kind() == reflect.Map {
 		fromMap := from.Interface().(map[string]any)
 		toMap := to.Interface().(map[string]any)
-
 		if opt.valueConverter != nil {
 			for k, v := range fromMap {
 				toMap[k] = opt.valueConverter(k, v)
@@ -56,11 +56,10 @@ func copier(dst, src any, opt options) error {
 		return ErrNotSupported
 	}
 
-	println(get)
 	switch to.Kind() {
 	case reflect.Struct:
 		for v, f := range get.Iter() {
-			tv := to.FieldByName(f.toName)
+			tv := getFieldByName(to, f.toName)
 			if tv.IsValid() && tv.CanSet() {
 				if opt.valueConverter != nil {
 					v = opt.valueConverter(f.name, v)
@@ -81,4 +80,16 @@ func copier(dst, src any, opt options) error {
 	}
 
 	return err
+}
+
+func getFieldByName(to reflect.Value, name string) reflect.Value {
+	for i := range to.NumField() {
+		f := to.Type().Field(i)
+		if strings.EqualFold(f.Name, name) {
+			return to.FieldByName(f.Name)
+		}
+
+	}
+	tv := reflect.Value{}
+	return tv
 }
