@@ -1,7 +1,9 @@
 package sm2
 
 import (
+	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 
 	"github.com/charlienet/go-misc/bytesconv"
@@ -23,30 +25,63 @@ type sm2Instance struct {
 	puk  *s.PublicKey
 }
 
-func WithSm2PrivateKey(p []byte, pwd []byte) option {
-	return func(so *sm2Instance) error {
-		priv, err := x.ReadPrivateKeyFromPem(p, pwd)
-		if err != nil {
-			return err
-		}
+var pemStart = []byte("\n-----BEGIN ")
 
-		so.prk = priv
+func WithSm2PrivateKey(priv []byte, pwd []byte) option {
+
+	return func(so *sm2Instance) error {
+		var dst []byte
+		if bytes.HasPrefix(priv, pemStart) {
+			_, err := base64.StdEncoding.Decode(dst, priv)
+			if err != nil {
+				return err
+			}
+
+			priv, err := x.ParsePKCS8PrivateKey(dst, pwd)
+			if err != nil {
+				return err
+			}
+
+			so.prk = priv
+		} else {
+			priv, err := x.ReadPrivateKeyFromPem(priv, pwd)
+			if err != nil {
+				return err
+			}
+
+			so.prk = priv
+		}
 		return nil
 	}
 }
 
-func WithSm2PublicKey(p []byte) option {
+func WithSm2PublicKey(pub []byte) option {
 	return func(so *sm2Instance) error {
-		if len(p) == 0 {
+		if len(pub) == 0 {
 			return nil
 		}
 
-		pub, err := x.ReadPublicKeyFromPem(p)
-		if err != nil {
-			return err
-		}
+		if bytes.HasPrefix(pub, pemStart) {
+			var dst []byte
+			_, err := base64.StdEncoding.Decode(dst, pub)
+			if err != nil {
+				return err
+			}
+			pubkey, err := x.ParseSm2PublicKey(dst)
+			if err != nil {
+				return err
+			}
 
-		so.puk = pub
+			so.puk = pubkey
+		} else {
+
+			pub, err := x.ReadPublicKeyFromPem(pub)
+			if err != nil {
+				return err
+			}
+
+			so.puk = pub
+		}
 		return nil
 	}
 }
