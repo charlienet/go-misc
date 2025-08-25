@@ -25,19 +25,13 @@ type sm2Instance struct {
 	puk  *s.PublicKey
 }
 
-var pemStart = []byte("\n-----BEGIN ")
+var pemStart = []byte("-----BEGIN ")
 
 func WithSm2PrivateKey(priv []byte, pwd []byte) option {
 
 	return func(so *sm2Instance) error {
-		var dst []byte
-		if bytes.HasPrefix(priv, pemStart) {
-			_, err := base64.StdEncoding.Decode(dst, priv)
-			if err != nil {
-				return err
-			}
-
-			priv, err := x.ParsePKCS8PrivateKey(dst, pwd)
+		if !bytes.HasPrefix(priv, pemStart) {
+			priv, err := x.ParsePKCS8PrivateKey(priv, pwd)
 			if err != nil {
 				return err
 			}
