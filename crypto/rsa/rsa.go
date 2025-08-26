@@ -1,6 +1,7 @@
 package rsa
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -61,14 +62,21 @@ func New(h crypto.Hash, opts ...rsaOption) (*rsaInstance, error) {
 	return o, nil
 }
 
-func ParsePKCS8PrivateKey(p []byte) rsaOption {
+var pemStart = []byte("-----BEGIN ")
+
+func ParsePKCS8PrivateKey(pri []byte) rsaOption {
 	return func(o *rsaInstance) error {
-		block, _ := pem.Decode(p)
-		if block == nil {
-			return errors.New("failed to decode private key")
+		if bytes.HasPrefix(pri, pemStart) {
+
+			block, _ := pem.Decode(pri)
+			if block == nil {
+				return errors.New("failed to decode private key")
+			}
+
+			pri = block.Bytes
 		}
 
-		prk, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		prk, err := x509.ParsePKCS8PrivateKey(pri)
 		if err != nil {
 			return err
 		}
@@ -79,14 +87,16 @@ func ParsePKCS8PrivateKey(p []byte) rsaOption {
 	}
 }
 
-func ParsePKCS1PrivateKey(p []byte) rsaOption {
+func ParsePKCS1PrivateKey(pri []byte) rsaOption {
 	return func(o *rsaInstance) error {
-		block, _ := pem.Decode(p)
-		if block == nil {
-			return errors.New("failed to decode private key")
+		if bytes.HasPrefix(pri, pemStart) {
+			block, _ := pem.Decode(pri)
+			if block == nil {
+				return errors.New("failed to decode private key")
+			}
+			pri = block.Bytes
 		}
-
-		prk, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		prk, err := x509.ParsePKCS1PrivateKey(pri)
 		if err != nil {
 			return err
 		}
@@ -97,14 +107,18 @@ func ParsePKCS1PrivateKey(p []byte) rsaOption {
 	}
 }
 
-func ParsePKIXPublicKey(p []byte) rsaOption {
+func ParsePKIXPublicKey(pub []byte) rsaOption {
 	return func(o *rsaInstance) error {
-		block, _ := pem.Decode(p)
-		if block == nil {
-			return errors.New("failed to decode public key")
+		if bytes.HasPrefix(pub, pemStart) {
+			block, _ := pem.Decode(pub)
+			if block == nil {
+				return errors.New("failed to decode public key")
+			}
+
+			pub = block.Bytes
 		}
 
-		k, err := x509.ParsePKIXPublicKey(block.Bytes)
+		k, err := x509.ParsePKIXPublicKey(pub)
 		if err != nil {
 			return err
 		}
