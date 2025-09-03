@@ -17,7 +17,7 @@ var (
 	ErrPublishFailed  = errors.New("publish failed")
 )
 
-type NacosConfig struct {
+type Config struct {
 	Host      string // nacos 地址
 	Port      int    // nacos 端口
 	GrpcPort  int    // nacos grpc 端口
@@ -28,7 +28,7 @@ type NacosConfig struct {
 }
 
 type NacosClient struct {
-	cfg          NacosConfig
+	cfg          Config
 	nameClient   naming_client.INamingClient
 	configClient config_client.IConfigClient
 }
@@ -40,7 +40,7 @@ type options struct {
 
 type option func(*options)
 
-func NewNacosClient(cfg NacosConfig) (*NacosClient, error) {
+func NewNacosClient(cfg Config) (*NacosClient, error) {
 	clientCofnig := constant.ClientConfig{
 		NamespaceId:         cfg.Namespace,
 		TimeoutMs:           5000,
@@ -97,6 +97,7 @@ type Instance struct {
 	IP          string
 	Port        uint64
 	Weight      float64
+	Ephemeral   bool
 }
 
 func (n *NacosClient) RegisterInstance(i Instance, opts ...option) (bool, error) {
@@ -109,6 +110,7 @@ func (n *NacosClient) RegisterInstance(i Instance, opts ...option) (bool, error)
 		GroupName:   opt.Group,
 		Enable:      true,
 		Healthy:     true,
+		Ephemeral:   i.Ephemeral,
 	})
 }
 
