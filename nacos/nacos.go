@@ -1,6 +1,7 @@
 package nacos
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 
@@ -31,16 +32,29 @@ type NacosClient struct {
 	cfg          Config
 	nameClient   naming_client.INamingClient
 	configClient config_client.IConfigClient
+	coder        Coder
 }
 
+type Coder interface {
+	Encode(data string) string
+	Decode(data string) (string, error)
+}
+
+var DefaultCoder = &base64Encoder{}
+
 type options struct {
-	Group string
-	Type  string
+	group string
+	typ   string
+	coder Coder
 }
 
 type option func(*options)
 
-func NewNacosClient(cfg Config) (*NacosClient, error) {
+func NewNacosClient(cfg Config, opts ...option) (*NacosClient, error) {
+	var o = options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	clientCofnig := constant.ClientConfig{
 		NamespaceId:         cfg.Namespace,
 		TimeoutMs:           5000,
@@ -77,18 +91,25 @@ func NewNacosClient(cfg Config) (*NacosClient, error) {
 		cfg:          cfg,
 		nameClient:   nameClient,
 		configClient: configClient,
+		coder:        o.coder,
 	}, nil
 }
 
 func WithType(typ string) option {
 	return func(o *options) {
-		o.Type = typ
+		o.typ = typ
 	}
 }
 
 func WithGroup(group string) option {
 	return func(o *options) {
-		o.Group = group
+		o.group = group
+	}
+}
+
+func WithCoder(coder Coder) option {
+	return func(o *options) {
+		o.coder = coder
 	}
 }
 
@@ -97,6 +118,7 @@ type Instance struct {
 	IP          string
 	Port        uint64
 	Weight      float64
+	Metadata    map[string]string
 	Ephemeral   bool
 }
 
@@ -107,10 +129,21 @@ func (n *NacosClient) RegisterInstance(i Instance, opts ...option) (bool, error)
 		Port:        i.Port,
 		ServiceName: i.ServiceName,
 		Weight:      i.Weight,
-		GroupName:   opt.Group,
+		GroupName:   opt.group,
 		Enable:      true,
 		Healthy:     true,
 		Ephemeral:   i.Ephemeral,
+		Metadata:    i.Metadata,
+	})
+}
+
+func (n *NacosClient) DeregisterInstance(i Instance, opts ...option) (bool, error) {
+	opt := n.getOpt(opts...)
+	return n.nameClient.DeregisterInstance(vo.DeregisterInstanceParam{
+		Ip:          i.IP,
+		Port:        i.Port,
+		ServiceName: i.ServiceName,
+		GroupName:   opt.group,
 	})
 }
 
@@ -123,7 +156,7 @@ func (n *NacosClient) BatchRegisterInstance(instances []Instance, opts ...option
 
 	param := vo.BatchRegisterInstanceParam{
 		ServiceName: instances[0].ServiceName,
-		GroupName:   opt.Group,
+		GroupName:   opt.group,
 	}
 	param.Instances = make([]vo.RegisterInstanceParam, 0, len(instances))
 	for _, i := range instances {
@@ -132,7 +165,7 @@ func (n *NacosClient) BatchRegisterInstance(instances []Instance, opts ...option
 			Port:        i.Port,
 			ServiceName: i.ServiceName,
 			Weight:      i.Weight,
-			GroupName:   opt.Group,
+			GroupName:   opt.group,
 			Enable:      true,
 		})
 	}
@@ -140,21 +173,11 @@ func (n *NacosClient) BatchRegisterInstance(instances []Instance, opts ...option
 	return n.nameClient.BatchRegisterInstance(param)
 }
 
-func (n *NacosClient) DeregisterInstance(i Instance, opts ...option) (bool, error) {
-	opt := n.getOpt(opts...)
-	return n.nameClient.DeregisterInstance(vo.DeregisterInstanceParam{
-		Ip:          i.IP,
-		Port:        i.Port,
-		ServiceName: i.ServiceName,
-		GroupName:   opt.Group,
-	})
-}
-
 func (n *NacosClient) GetService(serviceName string, opts ...option) (model.Service, error) {
 	opt := n.getOpt(opts...)
 	return n.nameClient.GetService(vo.GetServiceParam{
 		ServiceName: serviceName,
-		GroupName:   opt.Group,
+		GroupName:   opt.group,
 	})
 }
 
@@ -163,7 +186,7 @@ func (n *NacosClient) SelectAllInstances(serviceName string, opts ...option) ([]
 
 	return n.nameClient.SelectAllInstances(vo.SelectAllInstancesParam{
 		ServiceName: serviceName,
-		GroupName:   opt.Group,
+		GroupName:   opt.group,
 	})
 }
 
@@ -171,7 +194,7 @@ func (n *NacosClient) SelectInstances(serviceName string, opts ...option) ([]mod
 	opt := n.getOpt(opts...)
 	instances, err := n.nameClient.SelectInstances(vo.SelectInstancesParam{
 		ServiceName: serviceName,
-		GroupName:   opt.Group,
+		GroupName:   opt.group,
 		HealthyOnly: true,
 	})
 
@@ -182,7 +205,7 @@ func (n *NacosClient) SelectOneHealthyInstance(serviceName string, opts ...optio
 	opt := n.getOpt(opts...)
 	return n.nameClient.SelectOneHealthyInstance(vo.SelectOneHealthInstanceParam{
 		ServiceName: serviceName,
-		GroupName:   opt.Group,
+		GroupName:   opt.group,
 	})
 }
 
@@ -193,12 +216,16 @@ func (n *NacosClient) SetConfig(dataId string, content string, opts ...option) e
 
 	var err error
 
+	if n.coder != nil {
+		content = n.coder.Encode(content)
+	}
+
 	retries := NumberRetries
 	for published := false; !published && retries > 0; retries-- {
 		published, err = n.configClient.PublishConfig(vo.ConfigParam{
 			DataId:  dataId,
-			Group:   o.Group,
-			Type:    o.Type,
+			Group:   o.group,
+			Type:    o.typ,
 			Content: content,
 		})
 
@@ -215,7 +242,7 @@ func (n *NacosClient) SetConfig(dataId string, content string, opts ...option) e
 }
 
 // 获取配置文件
-func (n *NacosClient) GetConfig(cfg any, dataId string, opts ...option) error {
+func (n *NacosClient) GetConfig(dataId string, cfg any, opts ...option) error {
 	c, err := n.GetConfigString(dataId, opts...)
 	if err != nil {
 		return err
@@ -223,6 +250,13 @@ func (n *NacosClient) GetConfig(cfg any, dataId string, opts ...option) error {
 
 	if c == "" {
 		return ErrConfigNotFound
+	}
+
+	if n.coder != nil {
+		c, err = n.coder.Decode(c)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := json.Unmarshal([]byte(c), cfg); err != nil {
@@ -237,15 +271,57 @@ func (n *NacosClient) GetConfigString(dataId string, opts ...option) (string, er
 
 	c, err := n.configClient.GetConfig(vo.ConfigParam{
 		DataId: dataId,
-		Group:  o.Group,
+		Group:  o.group,
 	})
 
 	return c, err
 }
 
+func (n *NacosClient) ExistConfig(dataId string, opts ...option) (bool, error) {
+	o := n.getOpt(opts...)
+	c, err := n.configClient.GetConfig(vo.ConfigParam{
+		DataId: dataId,
+		Group:  o.group,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return c != "", nil
+}
+
+func (n *NacosClient) DeleteConfig(dataId string, opts ...option) error {
+	o := n.getOpt(opts...)
+	_, err := n.configClient.DeleteConfig(vo.ConfigParam{
+		DataId: dataId,
+		Group:  o.group,
+	})
+
+	return err
+}
+func (n *NacosClient) ListenConfig(dataId string, changed func(namespace, group, dataId, data string), opts ...option) error {
+	o := n.getOpt(opts...)
+
+	return n.configClient.ListenConfig(vo.ConfigParam{
+		DataId: dataId,
+		Group:  o.group,
+		OnChange: func(namespace, group, dataId, data string) {
+			changed(namespace, group, dataId, data)
+		},
+	})
+}
+
+func (n *NacosClient) CancelListenConfig(dataId string, opts ...option) error {
+	o := n.getOpt(opts...)
+	return n.configClient.CancelListenConfig(vo.ConfigParam{
+		DataId: dataId,
+		Group:  o.group,
+	})
+}
+
 func (n *NacosClient) getOpt(opts ...option) *options {
 	o := &options{
-		Group: n.cfg.Group,
+		group: n.cfg.Group,
 	}
 
 	for _, opt := range opts {
@@ -253,4 +329,19 @@ func (n *NacosClient) getOpt(opts ...option) *options {
 	}
 
 	return o
+}
+
+type base64Encoder struct{}
+
+func (base64Encoder) Encode(data string) string {
+	return base64.StdEncoding.EncodeToString([]byte(data))
+}
+
+func (base64Encoder) Decode(data string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return "", err
+	}
+
+	return string(decoded), nil
 }
