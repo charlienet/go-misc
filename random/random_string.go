@@ -1,6 +1,10 @@
 package random
 
-import "github.com/charlienet/go-misc/bytesconv"
+import (
+	"strings"
+
+	"github.com/charlienet/go-misc/bytesconv"
+)
 
 const (
 	uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -11,13 +15,6 @@ const (
 	allChars  = uppercase + lowercase + digit
 	hex       = digit + "ABCDEF"
 	_         = allChars + "/+"
-)
-
-var (
-	rng             = &fastRandGenerator{}
-	FastGenerator   = &fastRandGenerator{}
-	SecureGenerator = &secureRandGenerator{}
-	NormalGenerator = NewRandGenerator()
 )
 
 type charScope struct {
@@ -58,9 +55,23 @@ func StringScope(str string) *charScope {
 }
 
 // 生成指定长度的随机字符串
-func (scope *charScope) Generate(length int) string {
+func (scope *charScope) Generate(length int, prefix ...string) string {
+	preLength := 0
 	n := length
-	ret := make([]byte, n)
+
+	var ret []byte
+	if len(prefix) > 0 {
+		pre := strings.Join(prefix, "")
+		preLength = len(pre)
+
+		ret = make([]byte, 0, n+preLength)
+		copy(ret, bytesconv.StringToBytes(pre))
+		// ret = append(ret, bytesconv.StringToBytes(pre)...)
+	} else {
+		ret = make([]byte, 0, n)
+	}
+
+	var last byte
 
 	for i, cache, remain := n-1, rng.Int63(), scope.max; i >= 0; {
 		if remain == 0 {
@@ -68,8 +79,12 @@ func (scope *charScope) Generate(length int) string {
 		}
 
 		if idx := int(cache & int64(scope.mask)); idx < scope.length {
-			ret[i] = scope.bytes[idx]
-			i--
+			curr := scope.bytes[idx]
+			if curr != last {
+				ret = append(ret, curr)
+				last = curr
+				i--
+			}
 		}
 
 		cache >>= int64(scope.bits)
