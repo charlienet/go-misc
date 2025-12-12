@@ -64,9 +64,8 @@ func (scope *charScope) Generate(length int, prefix ...string) string {
 		pre := strings.Join(prefix, "")
 		preLength = len(pre)
 
-		ret = make([]byte, 0, n+preLength)
+		ret = make([]byte, preLength, n+preLength)
 		copy(ret, bytesconv.StringToBytes(pre))
-		// ret = append(ret, bytesconv.StringToBytes(pre)...)
 	} else {
 		ret = make([]byte, 0, n)
 	}
