@@ -8,6 +8,7 @@ import (
 
 	"github.com/bits-and-blooms/bitset"
 	"github.com/charlienet/gadget/redis"
+	"github.com/spaolacci/murmur3"
 
 	sredis "github.com/redis/go-redis/v9"
 )
@@ -58,10 +59,9 @@ func New(expectedInsertions uint, fpp float64, opts ...Option) BloomFilter {
 	m, k := optimalMK(o.n, o.p)
 
 	baseBloomFilter := baseBloomFilter{
-		k:     k,
-		m:     m,
-		seed1: 0xdeadbeef,
-		seed2: 0xcafebabe,
+		k:         k,
+		m:         m,
+		hashFuncs: generateHashFunctions(k),
 	}
 
 	if o.redis != nil {
@@ -79,10 +79,9 @@ func New(expectedInsertions uint, fpp float64, opts ...Option) BloomFilter {
 }
 
 type baseBloomFilter struct {
-	m     uint // 位数组大小
-	k     uint // 哈希函数数量
-	seed1 uint64
-	seed2 uint64
+	m         uint                         // 位数组大小
+	k         uint                         // 哈希函数数量
+	hashFuncs []func(data []byte) []uint64 // 哈希函数
 }
 
 type redisBloomFilter struct {
@@ -206,13 +205,22 @@ func (bf *localBloomFilter) EstimateFalsePositiveRate(n uint) float64 {
 }
 
 func (bf *baseBloomFilter) getLocations(data []byte) []uint {
-	h1, h2 := hash(data, bf.seed1, bf.seed2)
+	locations := make([]uint, len(bf.hashFuncs))
+	m64 := uint64(bf.m)
 
-	locations := make([]uint, bf.k)
-	u64m := uint64(bf.m)
+	for i, hashFunc := range bf.hashFuncs {
+		hashes := hashFunc(data)
 
-	for i := uint(0); i < bf.k; i++ {
-		location := (h1 + uint64(i)*h2) % u64m
+		// 使用双重哈希法：location = (h1 + i * h2) % m
+		h1 := hashes[0]
+		h2 := hashes[1]
+
+		// 确保非零
+		if h2 == 0 {
+			h2 = 1
+		}
+
+		location := (h1 + uint64(i)*h2) % m64
 		locations[i] = uint(location)
 	}
 
@@ -259,4 +267,24 @@ func optimalMK(n uint, p float64) (m, k uint) {
 	}
 
 	return
+}
+
+// 生成k个哈希函数
+func generateHashFunctions(k uint) []func(data []byte) []uint64 {
+	funcs := make([]func(data []byte) []uint64, k)
+
+	for i := range k {
+		seed := uint32(i)
+		funcs[i] = func(data []byte) []uint64 {
+			return murmur3Hash(data, seed)
+		}
+	}
+
+	return funcs
+}
+
+func murmur3Hash(data []byte, seed uint32) []uint64 {
+	// 使用murmur3生成多个哈希值
+	h1, h2 := murmur3.Sum128WithSeed(data, seed)
+	return []uint64{h1, h2}
 }
