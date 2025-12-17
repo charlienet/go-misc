@@ -68,6 +68,7 @@ func New(expectedInsertions uint, fpp float64, opts ...Option) BloomFilter {
 		return &redisBloomFilter{
 			baseBloomFilter: baseBloomFilter,
 			rdb:             o.redis,
+			key:             o.key,
 		}
 	}
 
