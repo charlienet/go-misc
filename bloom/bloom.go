@@ -2,8 +2,6 @@ package bloom
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"math"
 
 	"github.com/bits-and-blooms/bitset"
@@ -59,17 +57,26 @@ func New(expectedInsertions uint, fpp float64, opts ...Option) BloomFilter {
 	m, k := optimalMK(o.n, o.p)
 
 	baseBloomFilter := baseBloomFilter{
-		k:         k,
-		m:         m,
-		hashFuncs: generateHashFunctions(k),
+		expectedInsertions: expectedInsertions,
+		fpp:                fpp,
+		k:                  k,
+		m:                  m,
+		hashFuncs:          generateHashFunctions(k),
 	}
 
 	if o.redis != nil {
-		return &redisBloomFilter{
+		useNativeBF := detectNativeBloomSupport(o.redis)
+
+		filter := &redisBloomFilter{
 			baseBloomFilter: baseBloomFilter,
 			rdb:             o.redis,
 			key:             o.key,
+			useNativeBF:     useNativeBF,
 		}
+
+		filter.build(context.Background())
+
+		return filter
 	}
 
 	return &localBloomFilter{
@@ -79,15 +86,18 @@ func New(expectedInsertions uint, fpp float64, opts ...Option) BloomFilter {
 }
 
 type baseBloomFilter struct {
-	m         uint                         // 位数组大小
-	k         uint                         // 哈希函数数量
-	hashFuncs []func(data []byte) []uint64 // 哈希函数
+	expectedInsertions uint
+	fpp                float64
+	m                  uint                         // 位数组大小
+	k                  uint                         // 哈希函数数量
+	hashFuncs          []func(data []byte) []uint64 // 哈希函数
 }
 
 type redisBloomFilter struct {
 	baseBloomFilter
-	key string
-	rdb redis.Client
+	key         string
+	useNativeBF bool
+	rdb         redis.Client
 }
 
 type localBloomFilter struct {
@@ -96,6 +106,10 @@ type localBloomFilter struct {
 }
 
 func (bf *redisBloomFilter) Add(ctx context.Context, data []byte) error {
+	if bf.useNativeBF {
+		return bf.rdb.BFAdd(ctx, bf.key, data).Err()
+	}
+
 	locations := bf.getLocations(data)
 
 	pipe := bf.rdb.Pipeline()
@@ -108,6 +122,10 @@ func (bf *redisBloomFilter) Add(ctx context.Context, data []byte) error {
 }
 
 func (bf *redisBloomFilter) Test(ctx context.Context, data []byte) (bool, error) {
+	if bf.useNativeBF {
+		return bf.rdb.BFExists(context.Background(), bf.key, data).Result()
+	}
+
 	locations := bf.getLocations(data)
 
 	pipe := bf.rdb.Pipeline()
@@ -137,6 +155,14 @@ func (bf *redisBloomFilter) Exists(ctx context.Context, data []byte) (bool, erro
 }
 
 func (bf *redisBloomFilter) Clear(ctx context.Context) error {
+	if bf.useNativeBF {
+		if err := bf.rdb.Del(ctx, bf.key).Err(); err != nil {
+			return err
+		}
+
+		return bf.rdb.BFReserve(ctx, bf.key, bf.fpp, int64(bf.expectedInsertions)).Err()
+	}
+
 	return bf.rdb.Del(ctx, bf.key).Err()
 }
 
@@ -155,6 +181,21 @@ func (bf *redisBloomFilter) EstimateFalsePositiveRate(n uint) float64 {
 	mf := float64(bf.m)
 
 	return math.Pow(1-math.Exp(-kf*nf/mf), kf)
+}
+
+func (bf *redisBloomFilter) build(ctx context.Context) error {
+	if bf.useNativeBF {
+		exist, err := bf.rdb.Exists(ctx).Result()
+		if err != nil {
+			return err
+		}
+
+		if exist == 0 {
+			return bf.rdb.BFReserve(ctx, bf.key, bf.fpp, int64(bf.expectedInsertions)).Err()
+		}
+	}
+
+	return nil
 }
 
 func (bf *localBloomFilter) Add(ctx context.Context, data []byte) error {
@@ -227,27 +268,6 @@ func (bf *baseBloomFilter) getLocations(data []byte) []uint {
 	return locations
 }
 
-// hash 哈希函数，返回两个哈希值（双重哈希法）
-func hash(data []byte, seed1, seed2 uint64) (uint64, uint64) {
-	// 使用SHA256哈希，确保良好的分布性
-	h := sha256.New()
-
-	// 写入第一个种子
-	binary.Write(h, binary.LittleEndian, seed1)
-	// 写入数据
-	h.Write(data)
-	hash1 := h.Sum(nil)
-
-	// 重新初始化哈希，使用第二个种子
-	h.Reset()
-	binary.Write(h, binary.LittleEndian, seed2)
-	h.Write(data)
-	hash2 := h.Sum(nil)
-
-	// 取前8字节作为哈希值
-	return binary.LittleEndian.Uint64(hash1[:8]), binary.LittleEndian.Uint64(hash2[:8])
-}
-
 func optimalMK(n uint, p float64) (m, k uint) {
 	// m = - (n * ln(p)) / (ln(2)^2)
 	m = uint(math.Ceil(-float64(n) * math.Log(p) / (math.Ln2 * math.Ln2)))
@@ -287,4 +307,17 @@ func murmur3Hash(data []byte, seed uint32) []uint64 {
 	// 使用murmur3生成多个哈希值
 	h1, h2 := murmur3.Sum128WithSeed(data, seed)
 	return []uint64{h1, h2}
+}
+
+func detectNativeBloomSupport(rdb redis.Client) bool {
+	testKey := "test_bf_support"
+	testValue := "test_value"
+
+	rdb.Del(context.Background(), testKey)
+
+	err := rdb.BFAdd(context.Background(), testKey, testValue).Err()
+
+	rdb.Del(context.Background(), testKey)
+
+	return err == nil
 }
