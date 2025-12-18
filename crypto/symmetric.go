@@ -150,16 +150,10 @@ func (a *symmetric) NewGCMWithRandomNonce() (CipherMode, error) {
 		return nil, err
 	}
 
-	nonce := make([]byte, gcm.NonceSize())
-	_, err = io.ReadFull(rand.Reader, nonce)
-	if err != nil {
-		return nil, err
-	}
-
 	a.embednonce = true
 	a.randomNonce = true
 
-	return &algo_gcm{symmetric: a, gcm: gcm, nonce: nonce}, nil
+	return &algo_gcm{symmetric: a, gcm: gcm}, nil
 }
 
 func (a *symmetric) NewCBC(iv []byte, opts ...optFunc) (CipherMode, error) {
@@ -251,16 +245,18 @@ func (a *algo_gcm) NonceSize() int {
 }
 
 func (a *algo_gcm) Encrypt(plainText []byte) bytesconv.BytesResult {
-	if a.randomNonce {
-		a.nonce = make([]byte, a.gcm.NonceSize())
-		// _, err := io.ReadFull(rand.Reader, a.nonce)
-		io.ReadFull(rand.Reader, a.nonce)
+	nonce := make([]byte, a.gcm.NonceSize())
+	if a.randomNonce || len(a.nonce) == 0 {
+		nonce = make([]byte, a.gcm.NonceSize())
+		io.ReadFull(rand.Reader, nonce)
+	} else {
+		copy(nonce, a.nonce)
 	}
 
 	if a.embednonce {
-		return a.gcm.Seal(a.nonce, a.nonce, plainText, nil)
+		return a.gcm.Seal(nonce, nonce, plainText, nil)
 	} else {
-		return a.gcm.Seal(nil, a.nonce, plainText, nil)
+		return a.gcm.Seal(nil, nonce, plainText, nil)
 	}
 }
 
