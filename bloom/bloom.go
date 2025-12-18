@@ -185,7 +185,7 @@ func (bf *redisBloomFilter) EstimateFalsePositiveRate(n uint) float64 {
 
 func (bf *redisBloomFilter) build(ctx context.Context) error {
 	if bf.useNativeBF {
-		exist, err := bf.rdb.Exists(ctx).Result()
+		exist, err := bf.rdb.Exists(ctx, bf.key).Result()
 		if err != nil {
 			return err
 		}
