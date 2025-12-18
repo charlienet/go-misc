@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/charlienet/go-misc/bytesconv"
 	"github.com/tjfoc/gmsm/sm4"
@@ -25,6 +26,8 @@ type Cipher interface {
 	NewGCMWithRandomNonce() (CipherMode, error)
 	NewCBC(iv []byte, opts ...optFunc) (CipherMode, error)
 	NewECB() CipherMode
+	BlockSize() int
+	IVSize() int
 }
 
 type CipherMode interface {
@@ -33,7 +36,7 @@ type CipherMode interface {
 }
 
 type StreamCipher interface {
-	XORKeyStream(src []byte) []byte
+	XORKeyStream(src []byte) bytesconv.BytesResult
 	Stream(reader io.Reader) io.Reader
 }
 
@@ -55,17 +58,17 @@ type creator struct {
 
 type optFunc func(*symmetric)
 
-func EmbedIV() optFunc {
-	return func(a *symmetric) {
-		a.embediv = true
-	}
-}
+// func EmbedIV() optFunc {
+// 	return func(a *symmetric) {
+// 		a.embediv = true
+// 	}
+// }
 
-func EmbedNonce() optFunc {
-	return func(a *symmetric) {
-		a.embednonce = true
-	}
-}
+// func EmbedNonce() optFunc {
+// 	return func(a *symmetric) {
+// 		a.embednonce = true
+// 	}
+// }
 
 func GenerateKey(algorithm string) (key, iv, nonce []byte, err error) {
 	blockSize, ivSize := BlockSize(algorithm)
@@ -93,67 +96,103 @@ func NewCipher(algorithm string, key []byte) (Cipher, error) {
 		return nil, fmt.Errorf("unsupported algorithm: %s", algorithm)
 	}
 
-	block, err := creator.new(key)
+	_, err := creator.new(key)
 	if err != nil {
 		return nil, err
 	}
 
-	return &symmetric{block: block}, nil
+	return &symmetric{creator: creator, key: key, pool: sync.Pool{
+		New: func() any {
+			block, _ := creator.new(key)
+			return block
+		},
+	}}, nil
 }
 
 type symmetric struct {
-	block       cipher.Block
-	embediv     bool
-	embednonce  bool
-	randomNonce bool
+	key     []byte
+	creator *creator
+	pool    sync.Pool
 }
 
 func (a *symmetric) BlockSize() int {
-	return a.block.BlockSize()
+	return a.creator.blockSize
 }
 
-type stream struct {
-	stream cipher.Stream
+func (a *symmetric) IVSize() int {
+	return a.creator.ivSize
+}
+
+type streamCipher struct {
+	*symmetric
+	pool sync.Pool
 }
 
 func (a *symmetric) NewCTR(iv []byte) StreamCipher {
-	s := cipher.NewCTR(a.block, iv)
-	return &stream{stream: s}
+	return &streamCipher{
+		symmetric: a,
+		pool: sync.Pool{
+			New: func() any {
+				block, _ := a.creator.new(a.key)
+				s := cipher.NewCTR(block, iv)
+
+				return s
+			},
+		}}
 }
 
-func (s *stream) XORKeyStream(src []byte) []byte {
+func (s *streamCipher) XORKeyStream(src []byte) bytesconv.BytesResult {
+	obj := s.pool.Get()
+	defer s.pool.Put(obj)
+
+	stream := obj.(cipher.Stream)
+
 	dst := make([]byte, len(src))
-	s.stream.XORKeyStream(dst, src)
+	stream.XORKeyStream(dst, src)
 	return dst
 }
 
-func (s *stream) Stream(reader io.Reader) io.Reader {
-	return cipher.StreamReader{S: s.stream, R: reader}
+func (s *streamCipher) Stream(reader io.Reader) io.Reader {
+	obj := s.pool.Get()
+	defer s.pool.Put(obj)
+
+	stream := obj.(cipher.Stream)
+	return cipher.StreamReader{S: stream, R: reader}
 }
 
-func (s *stream) Reset() {
+func (s *streamCipher) Reset() {
 }
 
 func (a *symmetric) NewGCM(nonce []byte, opts ...optFunc) (CipherMode, error) {
-	gcm, err := cipher.NewGCM(a.block)
-	if err != nil {
-		return nil, err
-	}
+	return &algo_gcm{symmetric: a, nonce: nonce, pool: sync.Pool{
+		New: func() any {
+			block, _ := a.creator.new(a.key)
 
-	gcm.NonceSize()
-	return &algo_gcm{symmetric: a, gcm: gcm, nonce: nonce}, nil
+			gcm, err := cipher.NewGCM(block)
+			if err != nil {
+				panic(err)
+			}
+
+			return gcm
+		},
+	}}, nil
 }
 
 func (a *symmetric) NewGCMWithRandomNonce() (CipherMode, error) {
-	gcm, err := cipher.NewGCM(a.block)
-	if err != nil {
-		return nil, err
-	}
+	return &algo_gcm{
+		embednonce:  true,
+		randomNonce: true,
+		pool: sync.Pool{
+			New: func() any {
+				block, _ := a.creator.new(a.key)
+				gcm, err := cipher.NewGCM(block)
+				if err != nil {
+					panic(err)
+				}
 
-	a.embednonce = true
-	a.randomNonce = true
-
-	return &algo_gcm{symmetric: a, gcm: gcm}, nil
+				return gcm
+			},
+		}}, nil
 }
 
 func (a *symmetric) NewCBC(iv []byte, opts ...optFunc) (CipherMode, error) {
@@ -177,31 +216,41 @@ type algo_ecb struct {
 }
 
 func (a *algo_ecb) Encrypt(plainText []byte) bytesconv.BytesResult {
+	block := a.pool.Get().(cipher.Block)
+	defer a.pool.Put(block)
+
 	plainText = a.pkcs7Padding(plainText)
 	dst := make([]byte, len(plainText))
-	a.block.Encrypt(dst, plainText)
+	block.Encrypt(dst, plainText)
 
 	return dst
 }
 
 func (a *algo_ecb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
+	block := a.pool.Get().(cipher.Block)
+	defer a.pool.Put(block)
+
 	var dst = make([]byte, len(cipherText))
-	a.block.Decrypt(dst, cipherText)
+	block.Decrypt(dst, cipherText)
 
 	return a.pkcs7UnPadding(dst)
 }
 
 type algo_cbc struct {
 	*symmetric
-	iv []byte
+	iv      []byte
+	embediv bool
 }
 
 func (a *algo_cbc) Encrypt(plainText []byte) bytesconv.BytesResult {
+	block := a.pool.Get().(cipher.Block)
+	defer a.pool.Put(block)
+
 	// The IV needs to be unique, but not secure. Therefore it's common to
 	// include it at the beginning of the ciphertext.
 
 	plainText = a.pkcs7Padding(plainText)
-	stream := cipher.NewCBCEncrypter(a.block, a.iv)
+	stream := cipher.NewCBCEncrypter(block, a.iv)
 
 	if a.embediv {
 		cipherText := make([]byte, len(plainText)+a.BlockSize())
@@ -218,16 +267,19 @@ func (a *algo_cbc) Encrypt(plainText []byte) bytesconv.BytesResult {
 }
 
 func (a *algo_cbc) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
+	block := a.pool.Get().(cipher.Block)
+	defer a.pool.Put(block)
+
 	// The IV needs to be unique, but not secure. Therefore it's common to
 	// include it at the beginning of the ciphertext.
 	if a.embediv {
 		iv, cipherText := ciphertext[:a.BlockSize()], ciphertext[a.BlockSize():]
-		stream := cipher.NewCBCDecrypter(a.block, iv)
+		stream := cipher.NewCBCDecrypter(block, iv)
 		stream.CryptBlocks(cipherText, cipherText)
 
 		return a.pkcs7UnPadding(cipherText)
 	} else {
-		stream := cipher.NewCBCDecrypter(a.block, a.iv)
+		stream := cipher.NewCBCDecrypter(block, a.iv)
 		stream.CryptBlocks(ciphertext, ciphertext)
 
 		return a.pkcs7UnPadding(ciphertext)
@@ -236,37 +288,44 @@ func (a *algo_cbc) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
 
 type algo_gcm struct {
 	*symmetric
-	gcm   cipher.AEAD
-	nonce []byte
+	embednonce  bool
+	randomNonce bool
+	nonce       []byte
+	pool        sync.Pool
 }
 
 func (a *algo_gcm) NonceSize() int {
-	return a.gcm.NonceSize()
+	return a.creator.blockSize
 }
 
 func (a *algo_gcm) Encrypt(plainText []byte) bytesconv.BytesResult {
-	nonce := make([]byte, a.gcm.NonceSize())
+	gcm := a.pool.Get().(cipher.AEAD)
+	defer a.pool.Put(gcm)
+
+	nonce := make([]byte, gcm.NonceSize())
 	if a.randomNonce || len(a.nonce) == 0 {
-		nonce = make([]byte, a.gcm.NonceSize())
 		io.ReadFull(rand.Reader, nonce)
 	} else {
 		copy(nonce, a.nonce)
 	}
 
 	if a.embednonce {
-		return a.gcm.Seal(nonce, nonce, plainText, nil)
+		return gcm.Seal(nonce, nonce, plainText, nil)
 	} else {
-		return a.gcm.Seal(nil, nonce, plainText, nil)
+		return gcm.Seal(nil, nonce, plainText, nil)
 	}
 }
 
 func (a *algo_gcm) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
+	gcm := a.pool.Get().(cipher.AEAD)
+	defer a.pool.Put(gcm)
+
 	if a.embednonce {
-		nonceSize := a.gcm.NonceSize()
+		nonceSize := gcm.NonceSize()
 		nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-		return a.gcm.Open(nil, nonce, ciphertext, nil)
+		return gcm.Open(nil, nonce, ciphertext, nil)
 	} else {
-		return a.gcm.Open(nil, a.nonce, ciphertext, nil)
+		return gcm.Open(nil, a.nonce, ciphertext, nil)
 	}
 }
 
