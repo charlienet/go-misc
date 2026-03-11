@@ -2,7 +2,7 @@ package json
 
 import (
 	"bytes"
-	"encoding/json"
+	ejson "encoding/json"
 	"reflect"
 	"sort"
 	"strings"
@@ -16,7 +16,7 @@ var (
 )
 
 // json.Marshaler 接口的反射类型
-var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+var jsonMarshalerType = reflect.TypeOf((*ejson.Marshaler)(nil)).Elem()
 
 // field 表示结构体的一个导出字段（经冲突解决后的最终字段）
 type field struct {
@@ -89,7 +89,7 @@ func encodeValue(val reflect.Value, convert func(string) string) ([]byte, error)
 
 	// 检查是否实现了 json.Marshaler
 	if val.Type().Implements(jsonMarshalerType) {
-		return val.Interface().(json.Marshaler).MarshalJSON()
+		return val.Interface().(ejson.Marshaler).MarshalJSON()
 	}
 
 	switch val.Kind() {
@@ -101,7 +101,7 @@ func encodeValue(val reflect.Value, convert func(string) string) ([]byte, error)
 		return encodeSlice(val, convert)
 	default:
 		// 基本类型直接使用标准库编码
-		return json.Marshal(val.Interface())
+		return Marshal(val.Interface())
 	}
 }
 
@@ -142,7 +142,7 @@ func encodeStruct(val reflect.Value, convert func(string) string) ([]byte, error
 		first = false
 
 		// 键名需 JSON 转义
-		keyBytes, err := json.Marshal(key)
+		keyBytes, err := Marshal(key)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +159,7 @@ func encodeStruct(val reflect.Value, convert func(string) string) ([]byte, error
 func encodeMap(val reflect.Value, convert func(string) string) ([]byte, error) {
 	// 非字符串键的 map 在 JSON 中不支持
 	if val.Type().Key().Kind() != reflect.String {
-		return nil, &json.UnsupportedTypeError{Type: val.Type()}
+		return nil, &ejson.UnsupportedTypeError{Type: val.Type()}
 	}
 
 	buf := &bytes.Buffer{}
@@ -186,7 +186,7 @@ func encodeMap(val reflect.Value, convert func(string) string) ([]byte, error) {
 		first = false
 
 		// 将转换后的键名 JSON 转义后写入
-		keyBytes, err := json.Marshal(convertedKey)
+		keyBytes, err := Marshal(convertedKey)
 		if err != nil {
 			return nil, err
 		}
