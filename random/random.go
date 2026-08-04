@@ -24,7 +24,7 @@ func Int[T scopeConstraint]() T {
 // 生成区间 n >= 0, n < max
 func Intn[T scopeConstraint](max T) T {
 	n := rng.Int63n(int64(max))
-	return T(n) % max
+	return T(n)
 }
 
 // 生成区间 n >= min, n < max

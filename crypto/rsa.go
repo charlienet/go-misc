@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 
 	"github.com/charlienet/go-misc/bytesconv"
 )
@@ -34,6 +35,12 @@ func new_rsa(opts ...keyFunc) (Asymmetric, error) {
 
 	if key.privateKey != "" {
 		if err := algo.WithPrivateKey(key.privateKey); err != nil {
+			return nil, err
+		}
+	}
+
+	if key.publicKey != "" {
+		if err := algo.WithPublicKey(key.publicKey); err != nil {
 			return nil, err
 		}
 	}
@@ -75,12 +82,25 @@ func (s *rsa_algo) WithPrivateKey(privateKey string) error {
 		return err
 	}
 
+	// 先尝试 PKCS1 格式
 	prk, err := x509.ParsePKCS1PrivateKey(prkBytes)
-	if err != nil {
-
+	if err == nil {
+		s.prk = prk
+		return nil
 	}
 
-	s.prk = prk
+	// 再尝试 PKCS8 格式
+	key, err := x509.ParsePKCS8PrivateKey(prkBytes)
+	if err != nil {
+		return err
+	}
+
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		return errors.New("not an RSA private key")
+	}
+
+	s.prk = rsaKey
 	return nil
 }
 
@@ -121,15 +141,19 @@ func (r *rsa_algo) Decrypt(msg []byte) (bytesconv.BytesResult, error) {
 }
 
 func (r *rsa_algo) Sign(data []byte) (bytesconv.BytesResult, error) {
-	hashed := r.hash.New().Sum(data)
+	h := r.hash.New()
+	h.Write(data)
+	hashed := h.Sum(nil)
 
-	signature, err := rsa.SignPSS(rand.Reader, r.prk, r.hash, hashed[:], nil)
+	signature, err := rsa.SignPSS(rand.Reader, r.prk, r.hash, hashed, nil)
 	return signature, err
 }
 
 func (r *rsa_algo) Verify(data, signature []byte) bool {
-	hashed := r.hash.New().Sum(data)
+	h := r.hash.New()
+	h.Write(data)
+	hashed := h.Sum(nil)
 
-	err := rsa.VerifyPSS(r.puk, r.hash, hashed[:], signature, nil)
+	err := rsa.VerifyPSS(r.puk, r.hash, hashed, signature, nil)
 	return err == nil
 }

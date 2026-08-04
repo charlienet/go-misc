@@ -7,14 +7,16 @@ const (
 )
 
 type options struct {
-	tagName          string              // 标签名
-	maxDepth         int                 // 最大复制深度
-	ignoreEmpty      bool                // 复制时忽略空字段
-	caseSensitive    bool                // 复制时大小写敏感
-	must             bool                // 只复制具有must标识的字段
-	converters       []TypeConverter     // 类型转换器
-	fieldNameMapping map[string]string   // 字段名转映射
-	nameConverter    func(string) string // 字段名转换器
+	tagName          string                // 标签名
+	maxDepth         int                   // 最大复制深度
+	ignoreEmpty      bool                  // 复制时忽略空字段
+	caseSensitive    bool                  // 复制时大小写敏感
+	must             bool                  // 只复制具有must标识的字段
+	converters       []TypeConverter       // 类型转换器
+	fieldNameMapping map[string]string     // 字段名转映射
+	nameConverter    func(string) string   // 字段名转换器
+	skipFields       []string              // 跳过的字段列表
+	valueConverter   func(string, any) any // 值转换函数
 }
 
 type option func(*options)
@@ -32,13 +34,14 @@ type FieldNameConverter struct {
 }
 
 func getOpt(opts ...option) *options {
-	opt := DefaultOptions
+	// 复制 DefaultOptions 避免测试间状态污染
+	opt := *DefaultOptions
 
 	for _, o := range opts {
-		o(opt)
+		o(&opt)
 	}
 
-	return opt
+	return &opt
 }
 
 func (opt *options) NameConvert(name string) string {
@@ -59,6 +62,15 @@ func (opt options) TypeConvert(value reflect.Value) (reflect.Value, bool) {
 
 func (opt *options) ExceedMaxDepth(depth int) bool {
 	return opt.maxDepth != noDepthLimited && depth > opt.maxDepth
+}
+
+func (opt *options) isSkipField(fieldName string) bool {
+	for _, skip := range opt.skipFields {
+		if skip == fieldName {
+			return true
+		}
+	}
+	return false
 }
 
 func WithMaxDepth(depth int) option {
@@ -106,6 +118,18 @@ func WithNameFn(fn func(string) string) option {
 func WithTagName(tagName string) option {
 	return func(o *options) {
 		o.tagName = tagName
+	}
+}
+
+func WithSkipFields(fields ...string) option {
+	return func(o *options) {
+		o.skipFields = fields
+	}
+}
+
+func WithValueConverter(fn func(string, any) any) option {
+	return func(o *options) {
+		o.valueConverter = fn
 	}
 }
 

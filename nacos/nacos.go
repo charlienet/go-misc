@@ -26,6 +26,8 @@ type Config struct {
 	Group     string // nacos 配置分组
 	CacheDir  string
 	LogDir    string
+	Username  string // 用户名（可选）
+	Password  string // 密码（可选）
 }
 
 type NacosClient struct {
@@ -61,6 +63,8 @@ func NewNacosClient(cfg Config, opts ...option) (*NacosClient, error) {
 		NotLoadCacheAtStart: true,
 		LogDir:              cfg.LogDir,
 		CacheDir:            cfg.CacheDir,
+		Username:            cfg.Username,
+		Password:            cfg.Password,
 	}
 
 	serverConfigs := []constant.ServerConfig{

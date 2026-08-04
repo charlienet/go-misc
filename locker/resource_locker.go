@@ -1,6 +1,9 @@
 package locker
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 type lockEntry struct {
 	mu       *sync.Mutex
@@ -42,10 +45,10 @@ func (rl *ResourceLocker) Lock(key string) {
 	entryPtr.mu.Lock()
 }
 
-func (rl *ResourceLocker) Unlock(key string) {
+func (rl *ResourceLocker) Unlock(key string) error {
 	entry, exists := rl.locks.Load(key)
 	if !exists {
-		panic("unlocking a non-locked resource")
+		return errors.New("unlocking a non-locked resource")
 	}
 
 	entryPtr := entry.(*lockEntry)
@@ -60,6 +63,8 @@ func (rl *ResourceLocker) Unlock(key string) {
 		entryPtr.refCount = 0
 		rl.pool.Put(entry)
 	}
+	
+	return nil
 }
 
 func (rl *ResourceLocker) TryLock(key string) bool {

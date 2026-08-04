@@ -1,0 +1,83 @@
+package mathx
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDeduction(t *testing.T) {
+	tests := []struct {
+		amount   int64
+		rate     float64
+		min      int64
+		max      int64
+		expected int64
+	}{
+		{10000, 1.0, 0, 0, 100},    // 1% of 10000 = 100
+		{10000, 0.5, 0, 0, 50},     // 0.5% of 10000 = 50
+		{100, 10.0, 0, 0, 10},      // 10% of 100 = 10
+		{10000, 0.01, 100, 0, 100}, // 低于最小值，返回 min
+		{10000, 50.0, 0, 1000, 1000}, // 超过最大值，返回 max
+		{-10000, 1.0, 0, 0, -100},  // 负数金额
+	}
+
+	for _, tt := range tests {
+		result := Deduction(tt.amount, tt.rate, tt.min, tt.max)
+		assert.Equal(t, tt.expected, result, "amount=%d, rate=%f, min=%d, max=%d", tt.amount, tt.rate, tt.min, tt.max)
+	}
+}
+
+func TestCentToDollar(t *testing.T) {
+	tests := []struct {
+		cent     int
+		expected string
+	}{
+		{100, "1.00"},
+		{1, "0.01"},
+		{0, "0.00"},
+		{999, "9.99"},
+	}
+
+	for _, tt := range tests {
+		result := CentToDollar(tt.cent)
+		assert.Equal(t, tt.expected, result)
+	}
+}
+
+func TestDollarToCent(t *testing.T) {
+	tests := []struct {
+		dollar   string
+		expected int
+	}{
+		{"1.00", 100},
+		{"0.01", 1},
+		{"0", 0},
+		{"9.99", 999},
+	}
+
+	for _, tt := range tests {
+		result := DollarToCent(tt.dollar)
+		assert.Equal(t, tt.expected, result)
+	}
+}
+
+func TestRound(t *testing.T) {
+	tests := []struct {
+		v         float64
+		precision int
+		expected  float64
+	}{
+		{3.14159, 0, 3},
+		{3.14159, 2, 3.14},
+		{3.14159, 4, 3.1416},
+		{3.5, 0, 4},
+		{2.5, 0, 3},
+		{-3.14159, 2, -3.14},
+	}
+
+	for _, tt := range tests {
+		result := Round(tt.v, tt.precision)
+		assert.InDelta(t, tt.expected, result, 0.0001)
+	}
+}

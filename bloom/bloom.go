@@ -2,11 +2,13 @@ package bloom
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"time"
 
 	"github.com/bits-and-blooms/bitset"
-	"github.com/charlienet/gadget/redis"
 	"github.com/spaolacci/murmur3"
+	"git.charlienet.top/go/gadget/redis"
 
 	sredis "github.com/redis/go-redis/v9"
 )
@@ -14,6 +16,8 @@ import (
 type BloomFilter interface {
 	// Add 添加元素到布隆过滤器
 	Add(ctx context.Context, data []byte) error
+	// AddBatch 批量添加元素到布隆过滤器，内部单管道批量执行
+	AddBatch(ctx context.Context, data [][]byte) error
 	// Test 检查元素是否可能存在
 	Test(ctx context.Context, data []byte) (bool, error)
 	// Exists 检查元素是否存在（Test的别名）
@@ -121,6 +125,41 @@ func (bf *redisBloomFilter) Add(ctx context.Context, data []byte) error {
 	return err
 }
 
+// maxBatchPerExec 单次管道批量写入的数据条数上限；每条含 k≈10 个 SETBIT，即单管道 ≤5 万命令
+const maxBatchPerExec = 5000
+
+func (bf *redisBloomFilter) AddBatch(ctx context.Context, data [][]byte) error {
+	for start := 0; start < len(data); start += maxBatchPerExec {
+		end := start + maxBatchPerExec
+		if end > len(data) {
+			end = len(data)
+		}
+		if err := bf.addBatchOnce(ctx, data[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (bf *redisBloomFilter) addBatchOnce(ctx context.Context, data [][]byte) error {
+	if bf.useNativeBF {
+		elements := make([]interface{}, len(data))
+		for i, d := range data {
+			elements[i] = d
+		}
+		return bf.rdb.BFMAdd(ctx, bf.key, elements...).Err()
+	}
+
+	pipe := bf.rdb.Pipeline()
+	for _, d := range data {
+		for _, location := range bf.getLocations(d) {
+			pipe.SetBit(ctx, bf.key, int64(location), 1)
+		}
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (bf *redisBloomFilter) Test(ctx context.Context, data []byte) (bool, error) {
 	if bf.useNativeBF {
 		return bf.rdb.BFExists(context.Background(), bf.key, data).Result()
@@ -205,6 +244,16 @@ func (bf *localBloomFilter) Add(ctx context.Context, data []byte) error {
 		bf.bitset.Set(location)
 	}
 
+	return nil
+}
+
+func (bf *localBloomFilter) AddBatch(ctx context.Context, data [][]byte) error {
+	for _, d := range data {
+		locations := bf.getLocations(d)
+		for _, location := range locations {
+			bf.bitset.Set(location)
+		}
+	}
 	return nil
 }
 
@@ -310,14 +359,14 @@ func murmur3Hash(data []byte, seed uint32) []uint64 {
 }
 
 func detectNativeBloomSupport(rdb redis.Client) bool {
-	testKey := "test_bf_support"
+	// 使用随机 key 避免与业务数据冲突
+	testKey := fmt.Sprintf("__bloom_test_%d__", time.Now().UnixNano())
 	testValue := "test_value"
 
-	rdb.Del(context.Background(), testKey)
+	ctx := context.Background()
+	defer rdb.Del(ctx, testKey) // 确保清理
 
-	err := rdb.BFAdd(context.Background(), testKey, testValue).Err()
-
-	rdb.Del(context.Background(), testKey)
+	err := rdb.BFAdd(ctx, testKey, testValue).Err()
 
 	return err == nil
 }

@@ -16,8 +16,8 @@ func TestAnyMap(t *testing.T) {
 
 	var m2 map[string]any
 
-	// Copy(&m2, &m1)
-
+	err := Copy(&m2, &m1)
+	assert.NoError(t, err)
 	assert.NotNil(t, m2)
 	assert.Equal(t, m1, m2)
 

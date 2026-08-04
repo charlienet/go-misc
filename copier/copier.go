@@ -85,31 +85,6 @@ func copier(dst, src any, opt *options) error {
 					}
 				}
 			}
-
-			// if name, ok := key.Interface().(string); ok {
-			// 	value := from.MapIndex(key)
-
-			// 	tv := getFieldByName(to, name, opt)
-
-			// 	if err := deepCopy(tv, value, 0, opt); err != nil {
-			// 		return err
-			// 	}
-			// 	// if tv.IsValid() && tv.CanSet() {
-			// 	// 	// if opt.valueConverter != nil {
-			// 	// 	// 	v = opt.valueConverter(f.name, v)
-			// 	// 	// }
-
-			// 	// 	// fromCopy := reflect.New(tv.Type())
-			// 	// 	// fromCopy.Set(reflect.ValueOf(v))
-			// 	// 	println("::::::", tv.Type().String())
-			// 	// 	ccc := value.Convert(tv.Type())
-			// 	// 	cccc := ccc.Interface()
-			// 	// 	_ = cccc
-
-			// 	// 	to.Set(value.Convert(tv.Type()))
-			// 	// }
-			// }
-
 		}
 		return nil
 	}
@@ -149,6 +124,11 @@ func deepCopy(dst, src reflect.Value, depth int, opt *options) error {
 				continue
 			}
 
+			// 检查是否在跳过列表中
+			if opt.isSkipField(sf.Name) {
+				continue
+			}
+
 			if sf.Anonymous && sf.Type.Kind() == reflect.Struct {
 				if err := deepCopy(dst, src.Field(i), depth+1, opt); err != nil {
 					return err
@@ -167,6 +147,14 @@ func deepCopy(dst, src reflect.Value, depth int, opt *options) error {
 
 			if opt.ignoreEmpty && value.IsZero() {
 				continue
+			}
+
+			// 应用值转换函数
+			if opt.valueConverter != nil {
+				converted := opt.valueConverter(sf.Name, value.Interface())
+				if converted != nil {
+					value = reflect.ValueOf(converted)
+				}
 			}
 
 			if value.Kind() == reflect.Struct {
@@ -197,30 +185,6 @@ func deepCopy(dst, src reflect.Value, depth int, opt *options) error {
 					if err := deepCopy(tv, v, depth+1, opt); err != nil {
 						return err
 					}
-
-					// if tv.IsValid() && tv.CanSet() {
-					// 	fromCopy := reflect.New(tv.Type())
-					// 	println("fromCopy:", fromCopy.Kind().String())
-					// 	fromCopy.Set(v)
-					// 	// dst.Set(fromCopy.Convert(dst.Type()))
-					// }
-
-					// value, _ := opt.TypeConvert(src.MapIndex(key))
-					// name = opt.NameConvert(name)
-
-					// if !dstValue.IsValid() {
-					// 	continue
-					// }
-
-					// if opt.ignoreEmpty && value.IsZero() {
-					// 	continue
-					// }
-
-					// println("dst value:", dstValue.Kind().String(), "name:", name, "value:", value.Kind().String())
-					// if err := deepCopy(dstValue, value, depth+1, opt); err != nil {
-					// 	return err
-					// }
-
 				} else {
 					return ErrMapKeyNotMatch
 				}
@@ -248,7 +212,19 @@ func deepCopy(dst, src reflect.Value, depth int, opt *options) error {
 		}
 
 		src = src.Elem()
-		newDst := reflect.New(src.Type().Elem())
+		if !src.IsValid() {
+			return nil
+		}
+
+		// 检查 src.Type() 是否为 nil 或不可寻址
+		srcType := src.Type()
+		if srcType == nil || srcType.Kind() != reflect.Ptr {
+			// 非指针类型，直接设置
+			dst.Set(src)
+			return nil
+		}
+
+		newDst := reflect.New(srcType.Elem())
 
 		if err := deepCopy(newDst, src, depth, opt); err != nil {
 			return err
@@ -295,21 +271,6 @@ func deepCopy(dst, src reflect.Value, depth int, opt *options) error {
 }
 
 func cpyStruct(dst, src reflect.Value, depth int, opt *options) error {
-	// if to.Type().Kind() == reflect.Struct {
-	// 	if to.CanSet() {
-	// 		p := reflect.New(to.Type().Elem())
-	// 		to.Set(p)
-	// 		return cpyStruct(to.Elem(), from, fieldName, opt)
-	// 	}
-	// }
-
-	// if to.CanSet() {
-	// 	if _, ok := from.Interface().(time.Time); ok {
-	// 		to.Set(from)
-	// 		return nil
-	// 	}
-	// }
-
 	if dst.CanSet() {
 		if _, ok := src.Interface().(time.Time); ok {
 			dst.Set(src)
@@ -325,6 +286,11 @@ func cpyStruct(dst, src reflect.Value, depth int, opt *options) error {
 	for i, n := 0, src.NumField(); i < n; i++ {
 		sf := typ.Field(i)
 		if sf.PkgPath != "" && !sf.Anonymous {
+			continue
+		}
+
+		// 检查是否在跳过列表中
+		if opt.isSkipField(sf.Name) {
 			continue
 		}
 
@@ -344,6 +310,14 @@ func cpyStruct(dst, src reflect.Value, depth int, opt *options) error {
 
 		if opt.ignoreEmpty && sField.IsZero() {
 			continue
+		}
+
+		// 应用值转换函数
+		if opt.valueConverter != nil {
+			converted := opt.valueConverter(sf.Name, sField.Interface())
+			if converted != nil {
+				sField = reflect.ValueOf(converted)
+			}
 		}
 
 		if err := deepCopy(dstValue, sField, depth+1, opt); err != nil {
