@@ -1,9 +1,5 @@
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
-git.charlienet.top/go/gadget/redis v0.1.5 h1:kyR2oRHr0yb35OBeLtQvjinTSvM77lHXgPHJ76SM++o=
-git.charlienet.top/go/gadget/redis v0.1.5/go.mod h1:AWBgbwqRUtmxN/N54JBfJXlo4qLr8gkKTR7HeBkRFxw=
-git.charlienet.top/go/gadget/test v0.1.5 h1:9ZTHb6eebVkprETy84s1FxwEL3gM9kAKNUogL6d2Ywc=
-git.charlienet.top/go/gadget/test v0.1.5/go.mod h1:l10kG7ORZRaqf9/hQT/017Xjx1lk2enriaFR7sLHNZI=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
 github.com/HdrHistogram/hdrhistogram-go v1.1.2/go.mod h1:yDgFjdqOqDEKOvasDdhWNXYg9BVp4O+o5f6V/ehm6Oo=
@@ -95,6 +91,10 @@ github.com/buger/jsonparser v1.6.1/go.mod h1:6RYKKt7H4d4+iWqouImQ9R2FZql3VbhNgx2
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/charlienet/gadget/redis v0.1.6 h1:FxhxoW+Pu3mJ2VNQ048ESGzCbS2cUVnG0RkOx+lxtmI=
+github.com/charlienet/gadget/redis v0.1.6/go.mod h1:75iHmcwBuE4Fw5ncjNEb+IWuFhmjJ6+TMD0f60h4Fu0=
+github.com/charlienet/gadget/test v0.1.5 h1:X1mh7FyX7EYS/MJrDQ2vYsmsuTVHkUE6miNlDJsFIoY=
+github.com/charlienet/gadget/test v0.1.5/go.mod h1:5TYhAu7Z4WAmM86qcbs6iV6niBIVg3xRdhYLZ9lj91c=
 github.com/clbanning/mxj/v2 v2.7.0 h1:WA/La7UGCanFe5NpHF0Q3DNtnCsVoxbPKuyBNHWRyME=
 github.com/clbanning/mxj/v2 v2.7.0/go.mod h1:hNiWqW14h+kc+MdF9C6/YoRfjEJoR3ou6tn/Qo+ve2s=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=

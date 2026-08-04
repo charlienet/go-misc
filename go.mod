@@ -3,10 +3,10 @@ module github.com/charlienet/go-misc
 go 1.26
 
 require (
-	git.charlienet.top/go/gadget/redis v0.1.5
 	github.com/alicebob/miniredis v2.5.0+incompatible
 	github.com/bits-and-blooms/bitset v1.24.6
 	github.com/cespare/xxhash/v2 v2.3.0
+	github.com/charlienet/gadget/redis v0.1.6
 	github.com/json-iterator/go v1.1.12
 	github.com/nacos-group/nacos-sdk-go/v2 v2.3.5
 	github.com/redis/go-redis/v9 v9.21.0

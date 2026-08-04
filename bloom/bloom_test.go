@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis"
+	"github.com/charlienet/gadget/redis"
 	"github.com/stretchr/testify/assert"
-	"git.charlienet.top/go/gadget/redis"
 )
 
 func TestLocalBloomFilter(t *testing.T) {
