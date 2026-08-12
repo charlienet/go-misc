@@ -65,7 +65,7 @@ func TestToMap(t *testing.T) {
 }
 
 // ============ WithTagName（option.go 覆盖率缺口 0%） ============
-// 同时覆盖 cpyStruct 的 tagIgnore 分支与 toName 的 toname 分支。
+// 同时覆盖 cpyStruct 的 tagSkip 分支与 toName 的 toname 分支。
 
 func TestWithTagName(t *testing.T) {
 	type srcT struct {
@@ -518,7 +518,7 @@ func TestAuditAplusStructToMapEdges(t *testing.T) {
 		assert.False(t, hasHidden)
 	})
 
-	t.Run("tagIgnore field skipped", func(t *testing.T) {
+	t.Run("tagSkip field skipped", func(t *testing.T) {
 		type srcT struct {
 			Name string `copier:"-"`
 			Age  int

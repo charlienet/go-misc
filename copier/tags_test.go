@@ -10,7 +10,7 @@ func TestParseTag(t *testing.T) {
 	tag := "must,toname=xxx"
 	opt := parseTag(tag)
 
-	exist := opt.Contains(tagMust)
+	exist := opt.Contains(tagRequired)
 	assert.True(t, exist)
 	exist = opt.Contains(32)
 	assert.False(t, exist)
@@ -21,7 +21,7 @@ func TestParseTag(t *testing.T) {
 
 	tag = "-"
 	opt = parseTag(tag)
-	assert.True(t, opt.Contains(tagIgnore))
+	assert.True(t, opt.Contains(tagSkip))
 
 }
 

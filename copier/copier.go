@@ -44,6 +44,12 @@
 //     如需 map 值级转换请使用 TypeConvert。
 //   - 无输入 map 大小的硬限制；极大 map 的拷贝由调用方自行评估内存风险。
 //     WithMaxDepth 可限制递归深度。
+//
+// # 来源
+//
+// 本库部分设计与实现借鉴自：
+//   - github.com/jinzhu/copier（MIT License）：tag 解析模式、方法→字段映射概念
+//   - github.com/tiendc/go-deepcopy（MIT License）：构建-缓存分离的 plan 缓存思路
 package copier
 
 import (
@@ -267,12 +273,12 @@ func deepCopyInner(dst, src reflect.Value, depth int, opt *options, visited map[
 			}
 
 			tag := parseTag(sf.Tag.Get(opt.tagName))
-			if tag.Contains(tagIgnore) {
+			if tag.Contains(tagSkip) {
 				continue
 			}
 
 			// must 模式：只拷贝带 must 标签的字段
-			if opt.must && !tag.Contains(tagMust) {
+			if opt.must && !tag.Contains(tagRequired) {
 				continue
 			}
 
@@ -625,12 +631,12 @@ func cpyStruct(dst, src reflect.Value, depth int, opt *options, visited map[uint
 		}
 
 		tag := parseTag(sf.Tag.Get(opt.tagName))
-		if tag.Contains(tagIgnore) {
+		if tag.Contains(tagSkip) {
 			continue
 		}
 
 		// must 模式：只拷贝带 must 标签的字段
-		if opt.must && !tag.Contains(tagMust) {
+		if opt.must && !tag.Contains(tagRequired) {
 			continue
 		}
 

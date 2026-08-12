@@ -57,8 +57,8 @@ func FuzzParseTag(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, tag string) {
 		opt := parseTag(tag)
-		_ = opt.Contains(tagMust)
-		_ = opt.Contains(tagIgnore)
+		_ = opt.Contains(tagRequired)
+		_ = opt.Contains(tagSkip)
 		_ = opt.ToName()
 	})
 }

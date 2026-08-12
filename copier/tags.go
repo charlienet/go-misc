@@ -8,10 +8,13 @@ const (
 
 type tagt uint8
 
+// 标签位掩码（自有命名，与 jinzhu/copier 内部实现去同质化）。
+// 用户可见语法严格保留：copier:"-"、copier:"must"、copier:"toname=xxx"、
+// copier:"must,toname=xxx" 组合。
 const (
-	tagMust tagt = 1 << iota
-	tagIgnore
-	tagToName
+	tagRequired tagt = 1 << iota // must：仅 WithMust 时拷贝
+	tagSkip                      // - / ignore：忽略该字段
+	tagToName                    // toname=xxx：重命名为 xxx
 )
 
 // 标签 copier 取值 must、ignore、toname 等
@@ -30,9 +33,9 @@ func parseTag(tag string) *tagOption {
 		tag, value, found := strings.Cut(t, "=")
 		switch tag {
 		case "-", "ignore":
-			flg |= tagIgnore
+			flg |= tagSkip
 		case "must":
-			flg |= tagMust
+			flg |= tagRequired
 		case "toname":
 			flg |= tagToName
 			if found {
