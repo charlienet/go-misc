@@ -144,6 +144,23 @@ func deepCopyInner(dst, src reflect.Value, depth int, opt *options, visited map[
 		return ErrMaxDepthExceeded
 	}
 
+	// 统一解包 src 的 interface 层：map[string]any 等场景的值以 interface 承载
+	// （可能嵌套多层 interface），在分支分发前解包，避免 Slice/Struct 等分支
+	// 对 interface Value 调用 Len/NumField 等导致 panic（如 map 容器值 → struct
+	// 容器字段）；nil/无效值在 dst 可写时置零后返回，与 Pointer/Interface 分支
+	// 的 nil 处理语义一致。
+	// 注：Pointer/Interface 分支内部原有的解包循环此后恒为 false（死代码），
+	// 保留不动以最小化 diff。
+	for src.IsValid() && src.Kind() == reflect.Interface {
+		src = src.Elem()
+	}
+	if !src.IsValid() {
+		if dst.CanSet() {
+			dst.Set(reflect.Zero(dst.Type()))
+		}
+		return nil
+	}
+
 	switch dst.Kind() {
 	case reflect.Map:
 		if dst.IsNil() && dst.CanSet() {
