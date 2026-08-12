@@ -94,3 +94,40 @@ func BenchmarkCopyWithOptions(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkCopyStructToMap 中型 struct → map[string]any（默认选项，走 plan 缓存路径）。
+func BenchmarkCopyStructToMap(b *testing.B) {
+	src := benchMedium{
+		Name: "John", Age: 30, Height: 1.75, Active: true,
+		Tags: []string{"a", "b"}, Meta: map[string]string{"k": "v"},
+		City: "Beijing", Score: 100, Level: 3, Created: time.Now(),
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var dst map[string]any
+		if err := Copy(&dst, src); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkCopyMapToStruct map[string]any → 中型 struct（默认选项，走 plan 缓存路径）。
+// 混入一个不匹配 key（"Unknown"），与真实场景一致（静默跳过）。
+// 容器值（Tags/Meta）经 deepCopyInner 入口 interface 解包后深拷贝。
+func BenchmarkCopyMapToStruct(b *testing.B) {
+	src := map[string]any{
+		"Name": "John", "Age": 30, "Height": 1.75, "Active": true,
+		"Tags": []string{"a", "b"}, "Meta": map[string]string{"k": "v"},
+		"City": "Beijing", "Score": int64(100), "Level": uint8(3),
+		"Unknown": "x",
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var dst benchMedium
+		if err := Copy(&dst, src); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
