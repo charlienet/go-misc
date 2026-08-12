@@ -61,18 +61,3 @@ func (o *tagOption) ToName() string {
 
 	return o.toname
 }
-
-func isValidTag(s string) bool {
-	if s == "" {
-		return false
-	}
-
-	for _, c := range s {
-		switch {
-		case strings.ContainsRune("!#$%&()*+-./:<=>?@[]^_{|}~ ", c):
-		default:
-			return false
-		}
-	}
-	return true
-}

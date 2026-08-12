@@ -1,5 +1,7 @@
 package copier
 
+import "slices"
+
 import "reflect"
 
 const (
@@ -28,11 +30,6 @@ type TypeConverter struct {
 	Fn        func(src any) (dst any, err error)
 }
 
-type FieldNameConverter struct {
-	SrcFieldName string
-	DstFieldName string
-}
-
 func getOpt(opts ...option) *options {
 	// 复制 DefaultOptions 避免测试间状态污染
 	opt := *DefaultOptions
@@ -56,8 +53,57 @@ func (opt *options) NameConvert(name string) string {
 	return name
 }
 
-func (opt options) TypeConvert(value reflect.Value) (reflect.Value, bool) {
+// TypeConvert 遍历 opt.converters，按 TypeConverter 声明的字段名/源类型/目标类型匹配并执行转换。
+// 匹配成功返回 (转换结果, true)，否则返回 (原值, false)。
+func (opt options) TypeConvert(fieldName string, value reflect.Value) (reflect.Value, bool) {
+	if len(opt.converters) == 0 {
+		return value, false
+	}
+
+	for _, tc := range opt.converters {
+		if tc.Fn == nil {
+			continue
+		}
+
+		if tc.FieldName != "" && tc.FieldName != fieldName {
+			continue
+		}
+
+		if tc.SrcType != nil && !typeMatch(tc.SrcType, value.Type()) {
+			continue
+		}
+
+		converted, err := tc.Fn(value.Interface())
+		if err != nil || converted == nil {
+			continue
+		}
+
+		if tc.DstType != nil && reflect.TypeOf(converted) != reflect.TypeOf(tc.DstType) {
+			continue
+		}
+
+		return reflect.ValueOf(converted), true
+	}
+
 	return value, false
+}
+
+func typeMatch(src any, t reflect.Type) bool {
+	st := reflect.TypeOf(src)
+	if st == nil {
+		return false
+	}
+
+	if st == t {
+		return true
+	}
+
+	// 排除数值↔string 跨类别（Go 中整数→string 是 rune 语义，不符合 SrcType 匹配预期）
+	if isNumericStringCross(st, t) {
+		return false
+	}
+
+	return st.ConvertibleTo(t) || t.ConvertibleTo(st)
 }
 
 func (opt *options) ExceedMaxDepth(depth int) bool {
@@ -65,12 +111,7 @@ func (opt *options) ExceedMaxDepth(depth int) bool {
 }
 
 func (opt *options) isSkipField(fieldName string) bool {
-	for _, skip := range opt.skipFields {
-		if skip == fieldName {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(opt.skipFields, fieldName)
 }
 
 func WithMaxDepth(depth int) option {
