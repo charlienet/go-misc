@@ -232,6 +232,11 @@ func deepCopyInner(dst, src reflect.Value, depth int, opt *options, visited map[
 			return nil
 		}
 
+		// struct -> map（plan 缓存快路径，行为与原循环完全等价）
+		if plan := getStructToMapPlan(src.Type(), opt); plan != nil {
+			return cpyStructToMap(dst, src, plan, depth, opt, visited)
+		}
+
 		// struct -> map
 		for i, n := 0, src.NumField(); i < n; i++ {
 			sf := src.Type().Field(i)
@@ -303,6 +308,11 @@ func deepCopyInner(dst, src reflect.Value, depth int, opt *options, visited map[
 		if src.Kind() == reflect.Struct {
 			return cpyStruct(dst, src, depth, opt, visited)
 		} else if src.Kind() == reflect.Map {
+			// map -> struct（plan 缓存快路径，行为与原循环完全等价）
+			if plan := getMapToStructPlan(dst.Type(), opt); plan != nil {
+				return cpyMapToStruct(dst, src, plan, depth, opt, visited)
+			}
+
 			// map -> struct
 			for _, key := range src.MapKeys() {
 				name, ok := key.Interface().(string)
@@ -580,6 +590,11 @@ func cpyStruct(dst, src reflect.Value, depth int, opt *options, visited map[uint
 		}
 	}
 
+	// plan 缓存：默认字段匹配配置下走预计算路径，行为与下方逐字段逻辑完全等价
+	if plan := getStructPlan(src.Type(), dst.Type(), opt); plan != nil {
+		return cpyStructByPlan(dst, src, plan, depth, opt, visited)
+	}
+
 	typ := src.Type()
 	for i, n := 0, src.NumField(); i < n; i++ {
 		sf := typ.Field(i)
@@ -605,8 +620,14 @@ func cpyStruct(dst, src reflect.Value, depth int, opt *options, visited map[uint
 		name := toName(sf.Name, tag, opt)
 
 		dstValue := getFieldByName(dst, name, opt)
-		// 未匹配到字段或字段不可设置（如大小写不敏感匹配到未导出字段）时跳过
+		// 未匹配到字段或字段不可设置（如大小写不敏感匹配到未导出字段）时，
+		// 降级尝试 dst 的 setter 方法（仅启用方法映射时，默认关闭保持向后兼容）
 		if !dstValue.IsValid() || !dstValue.CanSet() {
+			if opt.methodMapping {
+				if err := callSetter(dst, name, src.Field(i), opt); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
@@ -626,6 +647,198 @@ func cpyStruct(dst, src reflect.Value, depth int, opt *options, visited map[uint
 		}
 
 		if err := deepCopyInner(dstValue, sField, depth+1, opt, visited); err != nil {
+			return err
+		}
+	}
+
+	// 方向 B：src getter 方法 → dst 字段（仅启用方法映射时，默认关闭）
+	if opt.methodMapping {
+		if err := copyGetters(dst, src, depth, opt, visited); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// cpyStructByPlan 按预计算 plan.fields 迭代，行为与 cpyStruct 逐字段逻辑完全等价：
+// 对每条 fieldMapping：
+//   - dstIdx 非空：dst.FieldByIndex 取值，不可设置时降级 setter（仅启用方法映射时）；
+//     可设置则走与现有 cpyStruct 相同的后续逻辑（valueConverter → ignoreEmpty → deepCopyInner）
+//   - dstIdx 为空：无匹配字段，降级尝试 callSetter（仅启用方法映射时），否则静默跳过
+//
+// 全部字段处理完后，与现有一致：启用方法映射时调用 copyGetters。
+// plan 运行时零分配：name/srcName 预存在 plan 中，字段索引直接定位。
+func cpyStructByPlan(dst, src reflect.Value, plan *structPlan, depth int, opt *options, visited map[uintptr]bool) error {
+	for _, m := range plan.fields {
+		srcField := src.Field(m.srcIdx)
+
+		if len(m.dstIdx) == 0 {
+			// 无匹配字段：降级尝试 dst 的 setter 方法（仅启用方法映射时）
+			if opt.methodMapping {
+				if err := callSetter(dst, m.name, srcField, opt); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		// 常见场景（直接字段）用 Field 直接索引，避免 FieldByIndex 的索引链遍历
+		var dstValue reflect.Value
+		if len(m.dstIdx) == 1 {
+			dstValue = dst.Field(m.dstIdx[0])
+		} else {
+			dstValue = dst.FieldByIndex(m.dstIdx)
+		}
+		// 未导出字段等不可设置时，降级尝试 dst 的 setter 方法
+		if !dstValue.CanSet() {
+			if opt.methodMapping {
+				if err := callSetter(dst, m.name, srcField, opt); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		sField := srcField
+
+		// 应用值转换函数（先转换，后判空，避免空值被提前跳过）
+		if opt.valueConverter != nil {
+			c := opt.valueConverter(m.srcName, sField.Interface())
+			if c != nil {
+				sField = reflect.ValueOf(c)
+			}
+		}
+
+		// 判空基于转换后的结果
+		if opt.ignoreEmpty && sField.IsZero() {
+			continue
+		}
+
+		if err := deepCopyInner(dstValue, sField, depth+1, opt, visited); err != nil {
+			return err
+		}
+	}
+
+	// 方向 B：src getter 方法 → dst 字段（仅启用方法映射时，默认关闭）
+	if opt.methodMapping {
+		if err := copyGetters(dst, src, depth, opt, visited); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// cpyStructToMap 按预计算 plan.entries 迭代，行为与 deepCopyInner Map 分支
+// struct→map 循环完全等价：
+//   - expand=true：匿名 struct 字段递归展开
+//   - 否则：TypeConvert → valueConverter → ignoreEmpty →
+//     未转换 struct 展开嵌套 map / 容器 copyContainer / 直接 SetMapIndex
+func cpyStructToMap(dst, src reflect.Value, plan *structToMapPlan, depth int, opt *options, visited map[uintptr]bool) error {
+	for _, e := range plan.entries {
+		if e.expand {
+			// 匿名 struct 字段：递归展开
+			if err := deepCopyInner(dst, src.Field(e.srcIdx), depth+1, opt, visited); err != nil {
+				return err
+			}
+			continue
+		}
+
+		srcField := src.Field(e.srcIdx)
+		value, converted := opt.TypeConvert(e.srcName, srcField)
+
+		// 应用值转换函数（先转换，后判空，避免空值被提前跳过）
+		if opt.valueConverter != nil {
+			c := opt.valueConverter(e.srcName, value.Interface())
+			if c != nil {
+				value = reflect.ValueOf(c)
+			}
+		}
+
+		// 判空基于转换后的结果
+		if opt.ignoreEmpty && value.IsZero() {
+			continue
+		}
+
+		// 未经过类型转换的 struct 展开为嵌套 map；容器/指针字段深拷贝隔离；其余直接写入
+		if !converted && value.Kind() == reflect.Struct {
+			newDst := reflect.ValueOf(make(map[string]any, srcField.NumField()))
+			if err := deepCopyInner(newDst, value, depth+1, opt, visited); err != nil {
+				return err
+			}
+
+			dst.SetMapIndex(reflect.ValueOf(e.name), newDst)
+		} else if !converted && isContainerKind(value.Kind()) {
+			copied, err := copyContainer(value, depth, opt, visited)
+			if err != nil {
+				return err
+			}
+
+			dst.SetMapIndex(reflect.ValueOf(e.name), copied)
+		} else {
+			dst.SetMapIndex(reflect.ValueOf(e.name), value)
+		}
+	}
+
+	return nil
+}
+
+// cpyMapToStruct 按预计算 plan.lookup 迭代，行为与 deepCopyInner Struct 分支
+// map→struct 循环完全等价：
+// key 转 string（非 string → ErrMapKeyNotMatch）→ NameConvert → 查表定位 dst 字段
+// （与 getFieldByName 等价，FieldByIndex 索引链含嵌入提升）→ CanSet 检查 →
+// isSkipField → valueConverter → ignoreEmpty → deepCopyInner 递归。
+func cpyMapToStruct(dst, src reflect.Value, plan *mapToStructPlan, depth int, opt *options, visited map[uintptr]bool) error {
+	for _, key := range src.MapKeys() {
+		name, ok := key.Interface().(string)
+		if !ok {
+			return ErrMapKeyNotMatch
+		}
+
+		v := src.MapIndex(key)
+		name = opt.NameConvert(name)
+
+		// 查表定位 dst 字段（与 getFieldByName 等价）
+		lookupKey := name
+		if !opt.caseSensitive {
+			lookupKey = strings.ToLower(name)
+		}
+		index, ok := plan.lookup[lookupKey]
+		if !ok {
+			continue
+		}
+
+		tv := dst.FieldByIndex(index)
+		// 未匹配到字段或字段不可设置（未导出等）时跳过
+		if !tv.CanSet() {
+			continue
+		}
+
+		if opt.isSkipField(name) {
+			continue
+		}
+
+		// 应用值转换函数（先转换，后判空，避免空值被提前跳过）
+		if opt.valueConverter != nil {
+			c := opt.valueConverter(name, v.Interface())
+			if c != nil {
+				v = reflect.ValueOf(c)
+			}
+		}
+
+		if opt.ignoreEmpty {
+			// map[string]any 的值以 interface 承载，解包后再判断具体值是否为零值
+			vv := v
+			if vv.Kind() == reflect.Interface {
+				vv = vv.Elem()
+			}
+			if !vv.IsValid() || vv.IsZero() {
+				continue
+			}
+		}
+
+		if err := deepCopyInner(tv, v, depth+1, opt, visited); err != nil {
 			return err
 		}
 	}

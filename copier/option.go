@@ -19,6 +19,7 @@ type options struct {
 	nameConverter    func(string) string   // 字段名转换器
 	skipFields       []string              // 跳过的字段列表
 	valueConverter   func(string, any) any // 值转换函数
+	methodMapping    bool                  // 启用方法→字段映射（默认关闭）
 }
 
 type option func(*options)
@@ -171,6 +172,13 @@ func WithSkipFields(fields ...string) option {
 func WithValueConverter(fn func(string, any) any) option {
 	return func(o *options) {
 		o.valueConverter = fn
+	}
+}
+
+// WithMethodMapping 启用方法→字段映射。默认关闭以保持向后兼容与性能。
+func WithMethodMapping() option {
+	return func(o *options) {
+		o.methodMapping = true
 	}
 }
 
