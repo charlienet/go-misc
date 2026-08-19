@@ -19,6 +19,7 @@ type Asymmetric interface {
 	WithPrivateKey(privateKey string) error
 	WithPublicKey(publicKey string) error
 	ExportPublicKey() (string, error)
+	Name() string
 	Encrypt(msg []byte) (bytesconv.BytesResult, error)
 	Decrypt(ciphertext []byte) (bytesconv.BytesResult, error)
 	Signer

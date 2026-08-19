@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"fmt"
 
 	"github.com/charlienet/go-misc/bytesconv"
 )
@@ -86,21 +87,27 @@ func (s *rsa_algo) WithPrivateKey(privateKey string) error {
 	prk, err := x509.ParsePKCS1PrivateKey(prkBytes)
 	if err == nil {
 		s.prk = prk
-		return nil
+	} else {
+		// 再尝试 PKCS8 格式
+		key, err := x509.ParsePKCS8PrivateKey(prkBytes)
+		if err != nil {
+			return err
+		}
+
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return errors.New("not an RSA private key")
+		}
+
+		s.prk = rsaKey
 	}
 
-	// 再尝试 PKCS8 格式
-	key, err := x509.ParsePKCS8PrivateKey(prkBytes)
-	if err != nil {
-		return err
+	// 弱密钥校验：RSA 长度低于 2048-bit 视为不安全（如 512/1024-bit 已被视为可破解），直接拒绝
+	if s.prk.N.BitLen() < 2048 {
+		bits := s.prk.N.BitLen()
+		s.prk = nil
+		return fmt.Errorf("RSA private key too weak: %d bits, minimum required is 2048 bits", bits)
 	}
-
-	rsaKey, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		return errors.New("not an RSA private key")
-	}
-
-	s.prk = rsaKey
 	return nil
 }
 
@@ -115,11 +122,26 @@ func (s *rsa_algo) WithPublicKey(publicKey string) error {
 		return err
 	}
 
-	s.puk = k.(*rsa.PublicKey)
+	puk, ok := k.(*rsa.PublicKey)
+	if !ok {
+		return errors.New("not an RSA public key")
+	}
+
+	// 弱密钥校验：与私钥策略对称，公钥低于 2048-bit 同样拒绝
+	if puk.N.BitLen() < 2048 {
+		bits := puk.N.BitLen()
+		return fmt.Errorf("RSA public key too weak: %d bits, minimum required is 2048 bits", bits)
+	}
+
+	s.puk = puk
 	return nil
 }
 
 func (s *rsa_algo) ExportPublicKey() (string, error) {
+	if s.prk == nil {
+		return "", errors.New("RSA private key not set")
+	}
+
 	pub, err := x509.MarshalPKIXPublicKey(&s.prk.PublicKey)
 	if err != nil {
 		return "", err
@@ -131,16 +153,28 @@ func (s *rsa_algo) ExportPublicKey() (string, error) {
 var label = []byte("")
 
 func (r *rsa_algo) Encrypt(msg []byte) (bytesconv.BytesResult, error) {
+	if r.puk == nil {
+		return nil, errors.New("RSA public key not set")
+	}
+
 	cipher, err := rsa.EncryptOAEP(r.hash.New(), rand.Reader, r.puk, msg, label)
 	return cipher, err
 }
 
 func (r *rsa_algo) Decrypt(msg []byte) (bytesconv.BytesResult, error) {
+	if r.prk == nil {
+		return nil, errors.New("RSA private key not set")
+	}
+
 	plain, err := rsa.DecryptOAEP(r.hash.New(), rand.Reader, r.prk, msg, label)
 	return plain, err
 }
 
 func (r *rsa_algo) Sign(data []byte) (bytesconv.BytesResult, error) {
+	if r.prk == nil {
+		return nil, errors.New("RSA private key not set")
+	}
+
 	h := r.hash.New()
 	h.Write(data)
 	hashed := h.Sum(nil)
@@ -150,6 +184,10 @@ func (r *rsa_algo) Sign(data []byte) (bytesconv.BytesResult, error) {
 }
 
 func (r *rsa_algo) Verify(data, signature []byte) bool {
+	if r.puk == nil {
+		return false
+	}
+
 	h := r.hash.New()
 	h.Write(data)
 	hashed := h.Sum(nil)

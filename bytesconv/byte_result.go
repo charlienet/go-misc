@@ -1,8 +1,10 @@
 package bytesconv
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
 )
 
 const hexTable = "0123456789ABCDEF"
@@ -56,4 +58,8 @@ func (r BytesResult) Bytes() []byte {
 
 func (r BytesResult) String() string {
 	return r.Hex()
+}
+
+func (r BytesResult) Open() io.Reader {
+	return bytes.NewReader(r)
 }
