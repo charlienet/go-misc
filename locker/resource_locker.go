@@ -63,7 +63,7 @@ func (rl *ResourceLocker) Unlock(key string) error {
 		entryPtr.refCount = 0
 		rl.pool.Put(entry)
 	}
-	
+
 	return nil
 }
 

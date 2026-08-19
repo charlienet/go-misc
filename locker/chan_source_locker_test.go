@@ -45,19 +45,19 @@ func TestSourceLock(t *testing.T) {
 				}()
 			}
 			time.Sleep(time.Second * 2)
-			if ownNum != 1 {
+			if atomic.LoadInt32(&ownNum) != 1 {
 				t.Error("ownNum != 1")
 			}
-			if notOwnNum != int32(maxNum)-ownNum {
+			if atomic.LoadInt32(&notOwnNum) != int32(maxNum)-atomic.LoadInt32(&ownNum) {
 				t.Error("notOwnNum err")
 			}
 		}()
 	}
 	time.Sleep(time.Second * 3)
-	if totalOwnNum != 10 {
+	if atomic.LoadInt32(&totalOwnNum) != 10 {
 		t.Error("totalOwnNum != 10")
 	}
-	if totalNotOwnNum != int32(maxNum*maxKey)-totalOwnNum {
+	if atomic.LoadInt32(&totalNotOwnNum) != int32(maxNum*maxKey)-atomic.LoadInt32(&totalOwnNum) {
 		t.Error("totalNotOwnNum err")
 	}
 }
