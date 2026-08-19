@@ -12,13 +12,10 @@ import (
 	"strings"
 
 	"github.com/cespare/xxhash/v2"
-	
-	"github.com/spaolacci/murmur3"
-	"github.com/tjfoc/gmsm/sm3"
-
-
 	"github.com/charlienet/go-misc/bytesconv"
 	"github.com/charlienet/go-misc/crypto"
+	"github.com/emmansun/gmsm/sm3"
+	"github.com/spaolacci/murmur3"
 )
 
 var _ crypto.Signer = &hashComparer{}

@@ -7,13 +7,13 @@ require (
 	github.com/bits-and-blooms/bitset v1.24.6
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charlienet/gadget/redis v0.1.6
+	github.com/emmansun/gmsm v0.44.1
 	github.com/json-iterator/go v1.1.12
 	github.com/nacos-group/nacos-sdk-go/v2 v2.3.5
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.11.1
-	github.com/tjfoc/gmsm v1.4.1
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743
 )
 
@@ -63,6 +63,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

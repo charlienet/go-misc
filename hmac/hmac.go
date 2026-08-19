@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/charlienet/go-misc/bytesconv"
-	"github.com/tjfoc/gmsm/sm3"
+	"github.com/emmansun/gmsm/sm3"
 )
 
 type HMacFunc func(key, msg []byte) bytesconv.BytesResult
