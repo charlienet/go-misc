@@ -150,7 +150,7 @@ func TestRSA_ExportPublicKey(t *testing.T) {
 	assert.NotEmpty(t, kp.PrivateKey)
 
 	// 仅设置私钥
-	signer, err := NewAsymmetric("RSA", WithPrivateKey(kp.PrivateKey))
+	signer, err := NewAsymmetric("RSA", WithPrivateKeyObject(kp.PrivateKey))
 	assert.NoError(t, err)
 
 	pubB64, err := signer.ExportPublicKey()

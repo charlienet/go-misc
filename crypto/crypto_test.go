@@ -143,7 +143,7 @@ func TestRSA_SignAndVerify(t *testing.T) {
 	assert.NotEmpty(t, keyPair.PublicKey)
 
 	// 创建新的实例并设置私钥用于签名
-	signer, err := NewAsymmetric("RSA", WithPrivateKey(keyPair.PrivateKey))
+	signer, err := NewAsymmetric("RSA", WithPrivateKeyObject(keyPair.PrivateKey))
 	assert.NoError(t, err)
 
 	// 签名
@@ -153,7 +153,7 @@ func TestRSA_SignAndVerify(t *testing.T) {
 	assert.NotEmpty(t, signature)
 
 	// 创建新实例设置公钥用于验证
-	verifier, err := NewAsymmetric("RSA", WithPublicKey(keyPair.PublicKey))
+	verifier, err := NewAsymmetric("RSA", WithPublicKeyObject(keyPair.PublicKey))
 	assert.NoError(t, err)
 
 	// 验证
@@ -174,7 +174,7 @@ func TestRSA_EncryptAndDecrypt(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 创建新实例设置密钥
-	algo, err := NewAsymmetric("RSA", WithPrivateKey(keyPair.PrivateKey), WithPublicKey(keyPair.PublicKey))
+	algo, err := NewAsymmetric("RSA", WithPrivateKeyObject(keyPair.PrivateKey), WithPublicKeyObject(keyPair.PublicKey))
 	assert.NoError(t, err)
 
 	// 加密
@@ -202,7 +202,7 @@ func TestSM2_SignAndVerify(t *testing.T) {
 	assert.NotEmpty(t, keyPair.PublicKey)
 
 	// 创建新实例设置私钥用于签名
-	signer, err := NewAsymmetric("SM2", WithPrivateKey(keyPair.PrivateKey))
+	signer, err := NewAsymmetric("SM2", WithPrivateKeyObject(keyPair.PrivateKey))
 	assert.NoError(t, err)
 
 	// 签名
@@ -212,7 +212,7 @@ func TestSM2_SignAndVerify(t *testing.T) {
 	assert.NotEmpty(t, signature)
 
 	// 创建新实例设置公钥用于验证
-	verifier, err := NewAsymmetric("SM2", WithPublicKey(keyPair.PublicKey))
+	verifier, err := NewAsymmetric("SM2", WithPublicKeyObject(keyPair.PublicKey))
 	assert.NoError(t, err)
 
 	// 验证
@@ -229,7 +229,7 @@ func TestSM2_EncryptAndDecrypt(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 创建新实例设置密钥
-	algo, err := NewAsymmetric("SM2", WithPrivateKey(keyPair.PrivateKey), WithPublicKey(keyPair.PublicKey))
+	algo, err := NewAsymmetric("SM2", WithPrivateKeyObject(keyPair.PrivateKey), WithPublicKeyObject(keyPair.PublicKey))
 	assert.NoError(t, err)
 
 	// 加密
@@ -261,22 +261,174 @@ func TestPKCS7Padding(t *testing.T) {
 
 	// 测试填充
 	data := []byte("hello")
-	padded := pkcs7Padding(block, data)
+	padding := pkcs7Padding{}
+	padded, err := padding.Padding(block.BlockSize(), data)
+	assert.NoError(t, err)
 	assert.Len(t, padded, 16) // 5 + 11 bytes padding
 
 	// 测试去填充
-	unpadded, err := pkcs7UnPadding(block, padded)
+	unpadded, err := padding.UnPadding(block.BlockSize(), padded)
 	assert.NoError(t, err)
 	assert.Equal(t, data, unpadded)
 
 	// 测试边界情况：数据长度正好是块大小
 	data = []byte("0123456789abcdef") // 16 bytes
-	padded = pkcs7Padding(block, data)
+	padded, err = padding.Padding(block.BlockSize(), data)
+	assert.NoError(t, err)
 	assert.Len(t, padded, 32) // 16 + 16 bytes padding
 
-	unpadded, err = pkcs7UnPadding(block, padded)
+	unpadded, err = padding.UnPadding(block.BlockSize(), padded)
 	assert.NoError(t, err)
 	assert.Equal(t, data, unpadded)
+}
+
+// ==================== Padding 模式测试 ====================
+
+func TestZeroPadding(t *testing.T) {
+	padding := ZeroPadding{}
+	
+	blockSize := 16
+	data := []byte("hello")
+	padded, err := padding.Padding(blockSize, data)
+	assert.NoError(t, err)
+	assert.Len(t, padded, 16) // 5 + 11 bytes of zeros
+	
+	unpadded, err := padding.UnPadding(blockSize, padded)
+	assert.NoError(t, err)
+	assert.Equal(t, data, unpadded)
+	
+	// 测试数据长度正好是块大小的情况
+	data = []byte("0123456789abcdef") // 16 bytes
+	padded, err = padding.Padding(blockSize, data)
+	assert.NoError(t, err)
+	assert.Len(t, padded, 16) // 16 bytes, no padding needed
+	
+	unpadded, err = padding.UnPadding(blockSize, padded)
+	assert.NoError(t, err)
+	assert.Equal(t, data, unpadded)
+	
+	// 测试填充全零的情况
+	data = []byte("test")
+	padded, err = padding.Padding(blockSize, data)
+	assert.NoError(t, err)
+	assert.Len(t, padded, 16)
+	// 检查后12个字节是否都是0
+	for i := 4; i < 16; i++ {
+		assert.Equal(t, byte(0), padded[i])
+	}
+	
+	unpadded, err = padding.UnPadding(blockSize, padded)
+	assert.NoError(t, err)
+	assert.Equal(t, data, unpadded)
+}
+
+func TestNoPadding(t *testing.T) {
+	padding := NoPadding{}
+	
+	blockSize := 16
+	// 测试长度正确的数据
+	data := []byte("0123456789abcdef") // 16 bytes
+	padded, err := padding.Padding(blockSize, data)
+	assert.NoError(t, err)
+	assert.Equal(t, data, padded) // 应该没有变化
+	
+	unpadded, err := padding.UnPadding(blockSize, padded)
+	assert.NoError(t, err)
+	assert.Equal(t, data, unpadded)
+	
+	// 测试长度不正确的数据
+	shortData := []byte("hello")
+	_, err = padding.Padding(blockSize, shortData)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "data length must be multiple of block size")
+}
+
+func TestCBCWithZeroPadding(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("hello world") // 11 bytes, needs padding to 16
+	
+	cipher, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+	
+	// 使用 CBC 模式和 ZeroPadding
+	cbc, err := cipher.NewCBC(iv, WithPadding(ZeroPadding{}))
+	assert.NoError(t, err)
+	
+	// 加密
+	encrypted, err := cbc.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+	
+	// 解密
+	decrypted, err := cbc.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+}
+
+func TestECBWithNoPadding(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	plaintext := []byte("0123456789abcdef") // 16 bytes, exactly one block
+	
+	cipher, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+	
+	// 使用 ECB 模式和 NoPadding
+	ecb, err := cipher.NewECB(WithPadding(NoPadding{}))
+	assert.NoError(t, err)
+	
+	// 加密
+	encrypted, err := ecb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+	
+	// 解密
+	decrypted, err := ecb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+	
+	// 尝试加密长度不对的数据，应该失败
+	invalidPlaintext := []byte("hello")
+	_, err = ecb.Encrypt(invalidPlaintext)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "data length must be multiple of block size")
+}
+
+func TestDefaultPKCS7Padding(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("hello world") // 11 bytes, needs padding
+	
+	cipher, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+	
+	// 使用 CBC 模式，不指定填充（应该使用默认的 PKCS7）
+	cbc, err := cipher.NewCBC(iv)
+	assert.NoError(t, err)
+	
+	// 加密
+	encrypted, err := cbc.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+	
+	// 解密
+	decrypted, err := cbc.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+	
+	// 使用 ECB 模式，不指定填充（应该使用默认的 PKCS7）
+	ecb, err := cipher.NewECB()
+	assert.NoError(t, err)
+	
+	// 加密
+	encrypted, err = ecb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+	
+	// 解密
+	decrypted, err = ecb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
 }
 
 // ==================== GCM Nonce 大小 ====================
@@ -678,25 +830,24 @@ func TestPKCS7UnPadding_Errors(t *testing.T) {
 	// unpadding > BlockSize（17 > 16）
 	bad1 := make([]byte, 16)
 	bad1[15] = 17
-	_, err = pkcs7UnPadding(block, bad1)
+	padding := pkcs7Padding{}
+	_, err = padding.UnPadding(block.BlockSize(), bad1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unpadding > BlockSize")
 
 	// unpadding == 0
 	bad2 := make([]byte, 16)
 	bad2[15] = 0
-	_, err = pkcs7UnPadding(block, bad2)
+	_, err = padding.UnPadding(block.BlockSize(), bad2)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unpadding == 0")
 
 	// pad 字节不匹配：最后字节声明 2 字节填充，但倒数第二字节不对
 	bad3 := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0xFF, 2}
-	_, err = pkcs7UnPadding(block, bad3)
+	_, err = padding.UnPadding(block.BlockSize(), bad3)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "pad[i] != unpadding")
 }
-
-// ==================== CBC Decrypt EmbedIV 密文过短 ====================
 
 func TestCBC_Decrypt_EmbedIV_TooShort(t *testing.T) {
 	key := []byte("0123456789abcdef")
@@ -710,4 +861,183 @@ func TestCBC_Decrypt_EmbedIV_TooShort(t *testing.T) {
 	_, err = cbc.Decrypt([]byte("short"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ciphertext too short")
+}
+
+// ==================== CFB 模式测试 ====================
+
+func TestSymmetric_AES_CFB(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("hello world, this is a CFB mode test")
+
+	c, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+
+	cfb, err := c.NewCFB(iv)
+	assert.NoError(t, err)
+
+	encrypted, err := cfb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+
+	decrypted, err := cfb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+}
+
+func TestSymmetric_AES_CFB_EmbedIV(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("hello world, testing embed IV in CFB mode")
+
+	c, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+
+	cfb, err := c.NewCFB(iv, EmbedIV())
+	assert.NoError(t, err)
+
+	encrypted, err := cfb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+
+	// Check that the first 16 bytes are the IV
+	assert.Equal(t, iv, []byte(encrypted)[:16])
+
+	decrypted, err := cfb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+}
+
+// ==================== OFB 模式测试 ====================
+
+func TestSymmetric_AES_OFB(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("hello world, this is a OFB mode test")
+
+	c, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+
+	ofb, err := c.NewOFB(iv)
+	assert.NoError(t, err)
+
+	encrypted, err := ofb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+
+	decrypted, err := ofb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+}
+
+func TestSymmetric_AES_OFB_EmbedIV(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("hello world, testing embed IV in OFB mode")
+
+	c, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+
+	ofb, err := c.NewOFB(iv, EmbedIV())
+	assert.NoError(t, err)
+
+	encrypted, err := ofb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(encrypted))
+
+	// Check that the first 16 bytes are the IV
+	assert.Equal(t, iv, []byte(encrypted)[:16])
+
+	decrypted, err := ofb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+}
+
+// ==================== CFB 并发安全测试 ====================
+
+func TestSymmetric_CFB_Concurrent(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("concurrent test data")
+
+	c, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+
+	done := make(chan bool, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			cfb, err := c.NewCFB(iv)
+			assert.NoError(t, err)
+			encrypted, err := cfb.Encrypt(plaintext)
+			assert.NoError(t, err)
+			decrypted, err := cfb.Decrypt(encrypted)
+			assert.NoError(t, err)
+			assert.Equal(t, plaintext, []byte(decrypted))
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+// ==================== OFB 并发安全测试 ====================
+
+func TestSymmetric_OFB_Concurrent(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("concurrent test data")
+
+	c, err := NewCipher("AES", key)
+	assert.NoError(t, err)
+
+	done := make(chan bool, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			ofb, err := c.NewOFB(iv)
+			assert.NoError(t, err)
+			encrypted, err := ofb.Encrypt(plaintext)
+			assert.NoError(t, err)
+			decrypted, err := ofb.Decrypt(encrypted)
+			assert.NoError(t, err)
+			assert.Equal(t, plaintext, []byte(decrypted))
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
+// ==================== CFB/OFB 与不同算法测试 ====================
+
+func TestSymmetric_CFB_OFB_DifferentAlgorithms(t *testing.T) {
+	// 测试 SM4 的 CFB 模式
+	key := []byte("0123456789abcdef")
+	iv := []byte("abcdef0123456789")
+	plaintext := []byte("test with SM4 algorithm")
+
+	c, err := NewCipher("SM4", key)
+	assert.NoError(t, err)
+
+	cfb, err := c.NewCFB(iv)
+	assert.NoError(t, err)
+
+	encrypted, err := cfb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	decrypted, err := cfb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
+
+	// 测试 SM4 的 OFB 模式
+	ofb, err := c.NewOFB(iv)
+	assert.NoError(t, err)
+
+	encrypted, err = ofb.Encrypt(plaintext)
+	assert.NoError(t, err)
+	decrypted, err = ofb.Decrypt(encrypted)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
 }

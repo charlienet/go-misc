@@ -21,9 +21,9 @@ func TestSM2EncryptDecrypt(t *testing.T) {
 
 	keyPart, err := s.GenerateKey()
 	assert.NoError(t, err)
-	// 仅打印密钥长度，避免测试日志泄露密钥明文
-	t.Logf("generated private key length: %d bytes", len(keyPart.PrivateKey))
-	t.Logf("generated public key length: %d bytes", len(keyPart.PublicKey))
+	// 仅打印密钥类型，避免测试日志泄露密钥明文
+	t.Logf("generated private key type: %T", keyPart.PrivateKey)
+	t.Logf("generated public key type: %T", keyPart.PublicKey)
 
 	encrypted, err := s.Encrypt([]byte("hello world"))
 	assert.NoError(t, err)
@@ -102,7 +102,7 @@ func TestSM2_ExportPublicKey(t *testing.T) {
 	assert.NotEmpty(t, kp.PrivateKey)
 
 	// 仅设置私钥
-	signer, err := NewAsymmetric("SM2", WithPrivateKey(kp.PrivateKey))
+	signer, err := NewAsymmetric("SM2", WithPrivateKeyObject(kp.PrivateKey))
 	assert.NoError(t, err)
 
 	pubB64, err := signer.ExportPublicKey()

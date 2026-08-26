@@ -359,8 +359,8 @@ func BenchmarkBlockAeadThroughput(b *testing.B) {
 	c := mustCipher(b)
 
 	b.SetBytes(size)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		er, err := NewEncryptingReader(bytes.NewReader(plain), c, nonce, size)
 		if err != nil {
 			b.Fatal(err)

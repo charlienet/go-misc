@@ -18,6 +18,83 @@ const (
 	nonceSize = 12
 )
 
+// Padding 填充模式接口
+type Padding interface {
+	Padding(blockSize int, src []byte) ([]byte, error)
+	UnPadding(blockSize int, src []byte) ([]byte, error)
+}
+
+// pkcs7Padding PKCS7 填充模式
+type pkcs7Padding struct{}
+
+func (p pkcs7Padding) Padding(blockSize int, src []byte) ([]byte, error) {
+	padding := blockSize - len(src)%blockSize
+	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
+	return append(src, padtext...), nil
+}
+
+func (p pkcs7Padding) UnPadding(blockSize int, src []byte) ([]byte, error) {
+	length := len(src)
+	if length == 0 {
+		return nil, errors.New("invalid pkcs7 padding (empty src)")
+	}
+	unpadding := int(src[length-1])
+	if unpadding > blockSize || unpadding == 0 {
+		return nil, errors.New("invalid pkcs7 padding (unpadding > BlockSize || unpadding == 0)")
+	}
+
+	if length < unpadding {
+		return nil, errors.New("invalid pkcs7 padding (length < unpadding)")
+	}
+
+	pad := src[len(src)-unpadding:]
+	for i := 0; i < unpadding; i++ {
+		if pad[i] != byte(unpadding) {
+			return nil, errors.New("invalid pkcs7 padding (pad[i] != unpadding)")
+		}
+	}
+
+	return src[:(length - unpadding)], nil
+}
+
+// ZeroPadding 零填充模式
+type ZeroPadding struct{}
+
+func (p ZeroPadding) Padding(blockSize int, src []byte) ([]byte, error) {
+	padding := blockSize - len(src)%blockSize
+	if padding == blockSize {
+		padding = 0
+	}
+	if padding > 0 {
+		padtext := bytes.Repeat([]byte{0}, padding)
+		return append(src, padtext...), nil
+	}
+	return src, nil
+}
+
+func (p ZeroPadding) UnPadding(blockSize int, src []byte) ([]byte, error) {
+	// 从末尾去除所有 0x00 字节
+	end := len(src) - 1
+	for end >= 0 && src[end] == 0 {
+		end--
+	}
+	return src[:end+1], nil
+}
+
+// NoPadding 无填充模式
+type NoPadding struct{}
+
+func (p NoPadding) Padding(blockSize int, src []byte) ([]byte, error) {
+	if len(src)%blockSize != 0 {
+		return nil, fmt.Errorf("data length must be multiple of block size %d", blockSize)
+	}
+	return src, nil
+}
+
+func (p NoPadding) UnPadding(blockSize int, src []byte) ([]byte, error) {
+	return src, nil
+}
+
 // Cipher 对称加密算法接口。
 type Cipher interface {
 	Block() cipher.Block
@@ -27,7 +104,9 @@ type Cipher interface {
 	NewGCM(nonce []byte, opts ...optFunc) (CipherMode, error)
 	NewGCMWithRandomNonce() (CipherMode, error)
 	NewCBC(iv []byte, opts ...optFunc) (CipherMode, error)
-	NewECB() (CipherMode, error)
+	NewECB(opts ...optFunc) (CipherMode, error)
+	NewCFB(iv []byte, opts ...optFunc) (CipherMode, error)
+	NewOFB(iv []byte, opts ...optFunc) (CipherMode, error)
 }
 
 type CipherMode interface {
@@ -56,7 +135,7 @@ type creator struct {
 	ivSize  int
 }
 
-type optFunc func(*symmetric)
+type optFunc func(*modeConfig)
 
 // modeConfig 仅在构造期间使用，用于将选项传播到 mode 对象。
 type modeConfig struct {
@@ -64,29 +143,31 @@ type modeConfig struct {
 	embednonce  bool
 	randomNonce bool
 	aad         []byte
+	padding     Padding
 }
 
 func EmbedIV() optFunc {
-	return func(a *symmetric) {
-		if a.cfg != nil {
-			a.cfg.embediv = true
-		}
+	return func(cfg *modeConfig) {
+		cfg.embediv = true
 	}
 }
 
 func EmbedNonce() optFunc {
-	return func(a *symmetric) {
-		if a.cfg != nil {
-			a.cfg.embednonce = true
-		}
+	return func(cfg *modeConfig) {
+		cfg.embednonce = true
 	}
 }
 
 func WithAAD(aad []byte) optFunc {
-	return func(a *symmetric) {
-		if a.cfg != nil {
-			a.cfg.aad = aad
-		}
+	return func(cfg *modeConfig) {
+		cfg.aad = aad
+	}
+}
+
+// WithPadding 设置填充模式
+func WithPadding(padding Padding) optFunc {
+	return func(cfg *modeConfig) {
+		cfg.padding = padding
 	}
 }
 
@@ -131,7 +212,6 @@ func NewCipher(algorithm string, key []byte) (Cipher, error) {
 type symmetric struct {
 	block   cipher.Block
 	creator *creator
-	cfg     *modeConfig // 仅构造期间使用，构造后置 nil
 }
 
 func (a *symmetric) Block() cipher.Block {
@@ -150,11 +230,9 @@ func (a *symmetric) IVSize() int {
 // applyOpts 在构造期间应用选项，返回收集到的配置。
 func (a *symmetric) applyOpts(opts []optFunc) *modeConfig {
 	cfg := &modeConfig{}
-	a.cfg = cfg
 	for _, opt := range opts {
-		opt(a)
+		opt(cfg)
 	}
-	a.cfg = nil
 	return cfg
 }
 
@@ -266,11 +344,17 @@ func (a *symmetric) NewCBC(iv []byte, opts ...optFunc) (CipherMode, error) {
 		return nil, errors.New("WithAAD 仅支持 GCM")
 	}
 
+	padding := cfg.padding
+	if padding == nil {
+		padding = pkcs7Padding{}
+	}
+
 	return &algo_cbc{
 		block:   a.block,
 		creator: a.creator,
 		iv:      iv,
 		embediv: cfg.embediv,
+		padding: padding,
 	}, nil
 }
 
@@ -280,22 +364,27 @@ type algo_cbc struct {
 	iv      []byte
 	embediv bool
 	aad     []byte
+	padding Padding
 }
 
 func (a *algo_cbc) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	plainText = pkcs7Padding(a.block, plainText)
+	paddedText, err := a.padding.Padding(a.block.BlockSize(), plainText)
+	if err != nil {
+		return nil, err
+	}
+	
 	stream := cipher.NewCBCEncrypter(a.block, a.iv)
 
 	if a.embediv {
 		bs := a.block.BlockSize()
-		cipherText := make([]byte, len(plainText)+bs)
+		cipherText := make([]byte, len(paddedText)+bs)
 		copy(cipherText, a.iv)
-		stream.CryptBlocks(cipherText[bs:], plainText)
+		stream.CryptBlocks(cipherText[bs:], paddedText)
 		return cipherText, nil
 	}
 
-	cipherText := make([]byte, len(plainText))
-	stream.CryptBlocks(cipherText, plainText)
+	cipherText := make([]byte, len(paddedText))
+	stream.CryptBlocks(cipherText, paddedText)
 	return cipherText, nil
 }
 
@@ -308,64 +397,183 @@ func (a *algo_cbc) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
 		iv, cipherText := ciphertext[:bs], ciphertext[bs:]
 		stream := cipher.NewCBCDecrypter(a.block, iv)
 		stream.CryptBlocks(cipherText, cipherText)
-		return pkcs7UnPadding(a.block, cipherText)
+		return a.padding.UnPadding(a.block.BlockSize(), cipherText)
 	}
 
 	stream := cipher.NewCBCDecrypter(a.block, a.iv)
-	stream.CryptBlocks(ciphertext, ciphertext)
-	return pkcs7UnPadding(a.block, ciphertext)
+	dst := make([]byte, len(ciphertext))
+	stream.CryptBlocks(dst, ciphertext)
+	return a.padding.UnPadding(a.block.BlockSize(), dst)
 }
 
 // --- ECB ---
 
-func (a *symmetric) NewECB() (CipherMode, error) {
+func (a *symmetric) NewECB(opts ...optFunc) (CipherMode, error) {
+	cfg := a.applyOpts(opts)
+	
+	if cfg.aad != nil {
+		return nil, errors.New("WithAAD 仅支持 GCM")
+	}
+	
+	padding := cfg.padding
+	if padding == nil {
+		padding = pkcs7Padding{}
+	}
+
 	return &algo_ecb{
 		block:   a.block,
 		creator: a.creator,
+		padding: padding,
 	}, nil
+}
+
+// --- CFB ---
+
+func (a *symmetric) NewCFB(iv []byte, opts ...optFunc) (CipherMode, error) {
+	if len(iv) != a.BlockSize() {
+		return nil, errors.New("iv length is not equal to block size")
+	}
+	
+	cfg := a.applyOpts(opts)
+	if cfg.aad != nil {
+		return nil, errors.New("WithAAD 仅支持 GCM")
+	}
+	
+	return &algo_cfb{
+		block:   a.block,
+		iv:      iv,
+		embediv: cfg.embediv,
+	}, nil
+}
+
+type algo_cfb struct {
+	block   cipher.Block
+	iv      []byte
+	embediv bool
+}
+
+func (a *algo_cfb) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
+	stream := cipher.NewCFBEncrypter(a.block, a.iv)
+	
+	if a.embediv {
+		bs := a.block.BlockSize()
+		cipherText := make([]byte, len(plainText)+bs)
+		copy(cipherText, a.iv)
+		stream.XORKeyStream(cipherText[bs:], plainText)
+		return cipherText, nil
+	}
+	
+	cipherText := make([]byte, len(plainText))
+	stream.XORKeyStream(cipherText, plainText)
+	return cipherText, nil
+}
+
+func (a *algo_cfb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
+	if a.embediv {
+		bs := a.block.BlockSize()
+		if len(cipherText) < bs {
+			return nil, errors.New("ciphertext too short for embedded IV")
+		}
+		iv, ct := cipherText[:bs], cipherText[bs:]
+		stream := cipher.NewCFBDecrypter(a.block, iv)
+		plainText := make([]byte, len(ct))
+		stream.XORKeyStream(plainText, ct)
+		return plainText, nil
+	}
+	
+	stream := cipher.NewCFBDecrypter(a.block, a.iv)
+	plainText := make([]byte, len(cipherText))
+	stream.XORKeyStream(plainText, cipherText)
+	return plainText, nil
+}
+
+// --- OFB ---
+
+func (a *symmetric) NewOFB(iv []byte, opts ...optFunc) (CipherMode, error) {
+	if len(iv) != a.BlockSize() {
+		return nil, errors.New("iv length is not equal to block size")
+	}
+	
+	cfg := a.applyOpts(opts)
+	if cfg.aad != nil {
+		return nil, errors.New("WithAAD 仅支持 GCM")
+	}
+	
+	return &algo_ofb{
+		block:   a.block,
+		iv:      iv,
+		embediv: cfg.embediv,
+	}, nil
+}
+
+type algo_ofb struct {
+	block   cipher.Block
+	iv      []byte
+	embediv bool
+}
+
+func (a *algo_ofb) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
+	stream := cipher.NewOFB(a.block, a.iv)
+	
+	if a.embediv {
+		bs := a.block.BlockSize()
+		cipherText := make([]byte, len(plainText)+bs)
+		copy(cipherText, a.iv)
+		stream.XORKeyStream(cipherText[bs:], plainText)
+		return cipherText, nil
+	}
+	
+	cipherText := make([]byte, len(plainText))
+	stream.XORKeyStream(cipherText, plainText)
+	return cipherText, nil
+}
+
+func (a *algo_ofb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
+	if a.embediv {
+		bs := a.block.BlockSize()
+		if len(cipherText) < bs {
+			return nil, errors.New("ciphertext too short for embedded IV")
+		}
+		iv, ct := cipherText[:bs], cipherText[bs:]
+		stream := cipher.NewOFB(a.block, iv)
+		plainText := make([]byte, len(ct))
+		stream.XORKeyStream(plainText, ct)
+		return plainText, nil
+	}
+	
+	stream := cipher.NewOFB(a.block, a.iv)
+	plainText := make([]byte, len(cipherText))
+	stream.XORKeyStream(plainText, cipherText)
+	return plainText, nil
 }
 
 type algo_ecb struct {
 	block   cipher.Block
 	creator *creator
+	padding Padding
 }
 
 func (a *algo_ecb) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	plainText = pkcs7Padding(a.block, plainText)
-	dst := make([]byte, len(plainText))
-	a.block.Encrypt(dst, plainText)
+	paddedText, err := a.padding.Padding(a.block.BlockSize(), plainText)
+	if err != nil {
+		return nil, err
+	}
+	
+	dst := make([]byte, len(paddedText))
+	bs := a.block.BlockSize()
+	for i := 0; i < len(paddedText); i += bs {
+		a.block.Encrypt(dst[i:i+bs], paddedText[i:i+bs])
+	}
 	return dst, nil
 }
 
 func (a *algo_ecb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
 	dst := make([]byte, len(cipherText))
-	a.block.Decrypt(dst, cipherText)
-	return pkcs7UnPadding(a.block, dst)
-}
-
-// --- PKCS7 padding ---
-
-func pkcs7Padding(block cipher.Block, src []byte) []byte {
-	bs := block.BlockSize()
-	padding := bs - len(src)%bs
-	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
-	return append(src, padtext...)
-}
-
-func pkcs7UnPadding(block cipher.Block, src []byte) ([]byte, error) {
-	bs := block.BlockSize()
-	length := len(src)
-	unpadding := int(src[length-1])
-	if unpadding > bs || unpadding == 0 {
-		return nil, errors.New("invalid pkcs7 padding (unpadding > BlockSize || unpadding == 0)")
+	bs := a.block.BlockSize()
+	for i := 0; i < len(cipherText); i += bs {
+		a.block.Decrypt(dst[i:i+bs], cipherText[i:i+bs])
 	}
-
-	pad := src[len(src)-unpadding:]
-	for i := 0; i < unpadding; i++ {
-		if pad[i] != byte(unpadding) {
-			return nil, errors.New("invalid pkcs7 padding (pad[i] != unpadding)")
-		}
-	}
-
-	return src[:(length - unpadding)], nil
+	return a.padding.UnPadding(a.block.BlockSize(), dst)
 }
+
+

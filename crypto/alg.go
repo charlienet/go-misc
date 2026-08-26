@@ -12,6 +12,10 @@ const (
 	Algorithm3DES   = "3DES"
 	AlgorithmSM2    = "SM2"
 	AlgorithmRSA    = "RSA"
+	AlgorithmECDH   = "ECDH"
+	AlgorithmX25519 = "X25519"
+	AlgorithmECDSA  = "ECDSA"
+	AlgorithmED25519 = "ED25519"
 )
 
 // algorithmID 是 gcx1 信封中的算法标识字节。
@@ -62,6 +66,10 @@ func NormalizeAlgorithm(name string) (string, error) {
 		"AES128":  AlgorithmAES128, // 紧凑别名
 		"AES192":  AlgorithmAES192,
 		"AES256":  AlgorithmAES256,
+		"ECDH":    AlgorithmECDH,
+		"X25519":  AlgorithmX25519,
+		"ECDSA":   AlgorithmECDSA,
+		"ED25519": AlgorithmED25519,
 	}
 
 	// 直接精确匹配

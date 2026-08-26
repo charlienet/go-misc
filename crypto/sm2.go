@@ -19,18 +19,52 @@ type sm2_algo struct {
 func new_sm2(opts ...keyFunc) (Asymmetric, error) {
 	key := asymmetric{}
 	for _, opt := range opts {
-		opt(&key)
+		if err := opt(&key); err != nil {
+			return nil, err
+		}
 	}
 
 	s := &sm2_algo{}
 
-	if key.privateKey != "" {
+	// 优先使用密钥对象
+	if key.privateKeyObject != nil {
+		// First try direct sm2.PrivateKey
+		if sm2Key, ok := key.privateKeyObject.(*sm2.PrivateKey); ok {
+			s.prk = sm2Key
+		} else {
+			// Check if it's an ecdsa.PrivateKey that is actually an SM2 key
+			ecdsaKey, ok := key.privateKeyObject.(*ecdsa.PrivateKey)
+			if !ok {
+				return nil, errors.New("not an SM2 private key")
+			}
+			// Check if it's actually an SM2 key by checking the public key
+			if !sm2.IsSM2PublicKey(&ecdsaKey.PublicKey) {
+				return nil, errors.New("not an SM2 private key")
+			}
+			// We need to convert ecdsa.PrivateKey back to sm2.PrivateKey
+			// Create a new sm2.PrivateKey and copy the ecdsa.PrivateKey data
+			s.prk = &sm2.PrivateKey{
+				PrivateKey: *ecdsaKey,
+			}
+		}
+	} else if key.privateKey != "" {
 		if err := s.WithPrivateKey(key.privateKey); err != nil {
 			return nil, err
 		}
 	}
 
-	if key.publicKey != "" {
+	if key.publicKeyObject != nil {
+		// SM2 uses ecdsa.PublicKey internally
+		ecdsaKey, ok := key.publicKeyObject.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, errors.New("not an SM2 public key")
+		}
+		// Check if it's actually an SM2 key
+		if !sm2.IsSM2PublicKey(ecdsaKey) {
+			return nil, errors.New("not an SM2 public key")
+		}
+		s.puk = ecdsaKey
+	} else if key.publicKey != "" {
 		if err := s.WithPublicKey(key.publicKey); err != nil {
 			return nil, err
 		}
@@ -52,19 +86,9 @@ func (s *sm2_algo) GenerateKey() (KeyPair, error) {
 	s.prk = prv
 	s.puk = &s.prk.PublicKey
 
-	privDER, err := smx509.MarshalPKCS8PrivateKey(s.prk)
-	if err != nil {
-		return KeyPair{}, err
-	}
-
-	pubDER, err := smx509.MarshalPKIXPublicKey(s.puk)
-	if err != nil {
-		return KeyPair{}, err
-	}
-
 	return KeyPair{
-		PrivateKey: base64.StdEncoding.EncodeToString(privDER),
-		PublicKey:  base64.StdEncoding.EncodeToString(pubDER),
+		PrivateKey: prv,
+		PublicKey:  &prv.PublicKey,
 	}, nil
 }
 

@@ -26,7 +26,9 @@ func new_rsa(opts ...keyFunc) (Asymmetric, error) {
 	}
 
 	for _, opt := range opts {
-		opt(&key)
+		if err := opt(&key); err != nil {
+			return nil, err
+		}
 	}
 
 	algo := &rsa_algo{
@@ -34,13 +36,26 @@ func new_rsa(opts ...keyFunc) (Asymmetric, error) {
 		bits: key.bits,
 	}
 
-	if key.privateKey != "" {
+	// 优先使用密钥对象
+	if key.privateKeyObject != nil {
+		rsaKey, ok := key.privateKeyObject.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("not an RSA private key")
+		}
+		algo.prk = rsaKey
+	} else if key.privateKey != "" {
 		if err := algo.WithPrivateKey(key.privateKey); err != nil {
 			return nil, err
 		}
 	}
 
-	if key.publicKey != "" {
+	if key.publicKeyObject != nil {
+		rsaKey, ok := key.publicKeyObject.(*rsa.PublicKey)
+		if !ok {
+			return nil, errors.New("not an RSA public key")
+		}
+		algo.puk = rsaKey
+	} else if key.publicKey != "" {
 		if err := algo.WithPublicKey(key.publicKey); err != nil {
 			return nil, err
 		}
@@ -61,19 +76,9 @@ func (s *rsa_algo) GenerateKey() (KeyPair, error) {
 
 	s.prk = key
 
-	prk, err := x509.MarshalPKCS8PrivateKey(s.prk)
-	if err != nil {
-		return KeyPair{}, err
-	}
-
-	pub, err := x509.MarshalPKIXPublicKey(&s.prk.PublicKey)
-	if err != nil {
-		return KeyPair{}, err
-	}
-
 	return KeyPair{
-		PrivateKey: base64.StdEncoding.EncodeToString(prk),
-		PublicKey:  base64.StdEncoding.EncodeToString(pub),
+		PrivateKey: key,
+		PublicKey:  &key.PublicKey,
 	}, nil
 }
 

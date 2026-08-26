@@ -7,12 +7,8 @@ import (
 	"github.com/charlienet/go-misc/bytesconv"
 )
 
-// KeyPair 密钥对
-type KeyPair struct {
-	PrivateKey string
-	PublicKey  string
-}
-
+// KeyPair 已迁移到 keypair.go
+// 此文件中的 LegacyKeyPair 保留向后兼容
 // 非对称加密算法
 type Asymmetric interface {
 	GenerateKey() (KeyPair, error)
@@ -32,16 +28,20 @@ type Signer interface {
 
 var (
 	supportedAsymmetricAlgorithms = map[string]func(opts ...keyFunc) (Asymmetric, error){
-		"SM2": new_sm2,
-		"RSA": new_rsa,
+		"SM2":     new_sm2,
+		"RSA":     new_rsa,
+		"ECDSA":   new_ecdsa,
+		"Ed25519": new_ed25519,
 	}
 )
 
 type asymmetric struct {
-	publicKey  string
-	privateKey string
-	hash       crypto.Hash
-	bits       int
+	publicKey        string
+	privateKey       string
+	publicKeyObject  crypto.PublicKey
+	privateKeyObject crypto.PrivateKey
+	hash             crypto.Hash
+	bits             int
 }
 
 type keyFunc func(*asymmetric) error
@@ -56,6 +56,22 @@ func WithPublicKey(publicKey string) keyFunc {
 func WithPrivateKey(privateKey string) keyFunc {
 	return func(a *asymmetric) error {
 		a.privateKey = privateKey
+		return nil
+	}
+}
+
+// WithPrivateKeyObject 使用密钥对象创建非对称加密器
+func WithPrivateKeyObject(key crypto.PrivateKey) keyFunc {
+	return func(a *asymmetric) error {
+		a.privateKeyObject = key
+		return nil
+	}
+}
+
+// WithPublicKeyObject 使用密钥对象创建非对称加密器
+func WithPublicKeyObject(key crypto.PublicKey) keyFunc {
+	return func(a *asymmetric) error {
+		a.publicKeyObject = key
 		return nil
 	}
 }
