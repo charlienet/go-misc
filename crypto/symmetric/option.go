@@ -36,6 +36,14 @@ var (
 	WithIV = crypto.WithIV
 	// WithNonce 外部提供 GCM nonce：密文不含前缀，长度必须 12 字节。
 	WithNonce = crypto.WithNonce
+	// WithHexIV 将 hex 字符串解码为 IV 字节。
+	WithHexIV = crypto.WithHexIV
+	// WithBase64IV 将 Base64（StdEncoding）字符串解码为 IV 字节。
+	WithBase64IV = crypto.WithBase64IV
+	// WithHexNonce 将 hex 字符串解码为 GCM nonce 字节。
+	WithHexNonce = crypto.WithHexNonce
+	// WithBase64Nonce 将 Base64（StdEncoding）字符串解码为 GCM nonce 字节。
+	WithBase64Nonce = crypto.WithBase64Nonce
 	// WithAAD 设置 GCM 额外认证数据。
 	WithAAD = crypto.WithAAD
 	// WithPadding 设置填充模式。

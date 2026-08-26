@@ -95,4 +95,72 @@
 //
 // 使用 fsb1 流式加密时，调用方**必须**保证 baseNonce 在密钥生命周期内唯一。
 // nonce 复用将导致 GCM 认证失效，可能泄露明文。
+//
+// # 场景 6：fsb1 流式分块 AEAD（大文件加密）
+//
+//	package main
+//
+//	import (
+//		"bytes"
+//		"fmt"
+//		"io"
+//		"log"
+//		"os"
+//
+//		crypto "github.com/charlienet/go-misc/crypto"
+//		"github.com/charlienet/go-misc/crypto/envelope"
+//		_ "github.com/charlienet/go-misc/crypto/engines"
+//	)
+//
+//	func main() {
+//		// 准备密钥和 nonce
+//		key := make([]byte, 16) // AES-128
+//		baseNonce := make([]byte, 12)
+//		// 在真实场景中，使用 crypto.GenerateKey("AES-128") 和随机 nonce
+//
+//		// 创建 Cipher 对象
+//		cipher, err := crypto.NewCipher("AES-128", key)
+//		if err != nil {
+//			log.Fatal(err)
+//		}
+//
+//		// 加密：从文件读取，写入加密文件
+//		src, _ := os.Open("plaintext.bin")
+//		defer src.Close()
+//
+//		stat, _ := src.Stat()
+//		totalSize := stat.Size()
+//
+//		encReader, err := envelope.NewEncryptingReader(src, cipher, baseNonce, totalSize)
+//		if err != nil {
+//			log.Fatal(err)
+//		}
+//
+//		dst, _ := os.Create("encrypted.bin")
+//		defer dst.Close()
+//
+//		// 可预知密文长度
+//		cipherLen := encReader.Length()
+//		fmt.Printf("Encrypted size: %d bytes\n", cipherLen)
+//
+//		io.Copy(dst, encReader)
+//
+//		// 解密：从加密文件读取，写入解密文件
+//		encFile, _ := os.Open("encrypted.bin")
+//		defer encFile.Close()
+//
+//		decReader, err := envelope.NewDecryptingReader(encFile, cipher, baseNonce, totalSize)
+//		if err != nil {
+//			log.Fatal(err)
+//		}
+//
+//		out, _ := os.Create("decrypted.bin")
+//		defer out.Close()
+//
+//		io.Copy(out, decReader)
+//
+//		// 清理
+//		os.Remove("encrypted.bin")
+//		os.Remove("decrypted.bin")
+//	}
 package envelope

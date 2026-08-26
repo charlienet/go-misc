@@ -31,7 +31,7 @@ func TestEncryptor_ConstructionErrors(t *testing.T) {
 		{"未知算法", crypto.Algorithm(99), crypto.GCM, []crypto.Option{crypto.WithKey(key16)}, crypto.ErrUnknownAlgorithm},
 		{"未知模式", crypto.AES128, crypto.Mode(99), []crypto.Option{crypto.WithKey(key16)}, crypto.ErrUnknownMode},
 		{"密钥缺源", crypto.AES128, crypto.GCM, nil, crypto.ErrKeyRequired},
-		{"密钥多源", crypto.AES128, crypto.GCM, []crypto.Option{crypto.WithKey(key16), crypto.WithKeyPassword("other")}, crypto.ErrConflictingKeySource},
+		{"密钥缺源", crypto.AES128, crypto.GCM, nil, crypto.ErrKeyRequired},
 		{"坏 hex", crypto.AES128, crypto.GCM, []crypto.Option{crypto.WithHexPassword("zz")}, crypto.ErrInvalidHexPassword},
 		{"坏 base64", crypto.AES128, crypto.GCM, []crypto.Option{crypto.WithBase64Password("!!!not-base64!!!")}, crypto.ErrInvalidBase64Password},
 		{"密钥长度", crypto.AES256, crypto.GCM, []crypto.Option{crypto.WithKey(make([]byte, 16))}, crypto.ErrInvalidKeyLength},

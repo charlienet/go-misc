@@ -98,10 +98,9 @@
 //
 // 输出为紧凑格式（不自描述算法与模式，调用方必须持有 algorithm/mode 并在
 // Decrypt 时对称传参）：GCM 前置 12B 随机 nonce；CBC/CFB/OFB/CTR 前置
-// 块大小随机 IV/计数器；ECB 无前缀。密钥通过四个互斥密钥源选项提供
-// （WithKey/WithKeyPassword/WithHexPassword/WithBase64Password）：恰好
-// 指定一个，多源同现返回 ErrConflictingKeySource、缺源返回 ErrKeyRequired；
-// 密钥长度按算法严格校验。
+// 块大小随机 IV/计数器；ECB 无前缀。密钥通过四个密钥源选项提供
+// （WithKey/WithKeyPassword/WithHexPassword/WithBase64Password）：多个选项
+// 按调用顺序后者覆盖前者，缺源返回 ErrKeyRequired；密钥长度按算法严格校验。
 //
 // # KeyPair 数据契约
 //

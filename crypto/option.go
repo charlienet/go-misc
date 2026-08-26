@@ -19,11 +19,12 @@ type Config struct {
 	// ---- 模式化 API 选项（Encrypt/Decrypt 专用）----
 	IV    []byte // WithIV()：外部 IV/计数器；nil 表示随机生成并前置
 	Nonce []byte // WithNonce()：外部 GCM nonce；nil 表示随机生成并前置
+	IVError   error  // hex/base64 IV 解码失败
+	NonceError error // hex/base64 nonce 解码失败
 
-	// ---- 密钥源（四选一，互斥）----
-	Key        []byte // 解析出的密钥字节
-	KeySources int    // 密钥源选项被调用次数（互斥检测计数）
-	KeyError   error  // hex/base64 解码失败错误（ErrInvalidHexPassword/ErrInvalidBase64Password）；nil 表示未失败
+	// ---- 密钥源（多个选项按调用顺序覆盖）----
+	Key      []byte // 解析出的密钥字节（多个 With* 选项按调用顺序覆盖）
+	KeyError error  // hex/base64 解码失败错误（ErrInvalidHexPassword/ErrInvalidBase64Password）；nil 表示未失败
 
 	// ---- 安全策略 ----
 	AllowInsecure bool // WithInsecureAlgorithms()：允许使用不安全算法（DES/3DES）和模式（ECB）

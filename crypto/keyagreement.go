@@ -5,6 +5,17 @@ import (
 	"fmt"
 )
 
+// KeyAgreementAlgorithm 密钥协商算法枚举。
+// 与 AsymmetricAlgorithm 底层类型相同（string），值可互转。
+// 预定义值：ECDH / X25519 / SM2。
+//
+// 使用类型别名而非独立类型，保持与 AsymmetricAlgorithm 的兼容性，
+// 同时提供更精确的语义。调用方可选择使用更精确的类型名：
+//
+//	var alg crypto.KeyAgreementAlgorithm = crypto.ECDH
+//	ka, _ := crypto.NewKeyAgreement(alg)
+type KeyAgreementAlgorithm = AsymmetricAlgorithm
+
 // KeyAgreement 密钥协商接口。
 //
 // 并发安全说明：本接口实现（ECDH/X25519/SM2）均非并发安全，
@@ -32,7 +43,13 @@ type KeyAgreement interface {
 // 预定义算法仅支持 ECDH/X25519/SM2（RSA/ECDSA/ED25519 属非对称加解密，直接拒绝）；
 // 非预定义值（自定义算法/拼写错误）查询注册表，未注册时报
 // "no engine registered; import crypto/agreement" 错误。
-func NewKeyAgreement(algorithm AsymmetricAlgorithm) (KeyAgreement, error) {
+//
+// 参数类型为 KeyAgreementAlgorithm（AsymmetricAlgorithm 的别名），语义更精确。
+// 调用方可选择使用更精确的类型名：
+//
+//	var alg crypto.KeyAgreementAlgorithm = crypto.ECDH
+//	ka, _ := crypto.NewKeyAgreement(alg)
+func NewKeyAgreement(algorithm KeyAgreementAlgorithm) (KeyAgreement, error) {
 	creator, err := KeyAgreementFactoryFor(string(algorithm))
 	if err == nil {
 		return creator()

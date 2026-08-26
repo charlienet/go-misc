@@ -26,6 +26,9 @@
 // （PBKDF2-HMAC-SHA256 + AES-256-CBC，RFC 8018），取代已弃用的
 // x509.EncryptPEMBlock 传统格式；传统加密 PEM 仅保留读取兼容。
 //
+// RSA 密钥默认使用 PKCS8 格式（WithRSAKeyFormat 默认值）。
+// 如需 PKCS1 格式，显式传入 WithRSAKeyFormat(RSAKeyFormatPKCS1)。
+//
 // 安全说明：解析出的私钥与中间 DER 缓冲在生命周期内原地清零；
 // 私钥文件写入权限为 0600，公钥为 0644。
 package keymgr

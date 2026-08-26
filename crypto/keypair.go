@@ -28,7 +28,9 @@ func WithKeySize(bits int) KeyGenOption {
 	}
 }
 
-// WithCurve 设置 ECDSA 曲线
+// WithCurve 设置 ECDSA 曲线名称。
+// 可用值：P-256 / P-384 / P-521（P-224 已被禁用，返回错误）。
+// 默认值：P-256。
 func WithCurve(curve string) KeyGenOption {
 	return func(cfg *KeyGenConfig) {
 		cfg.Curve = curve
@@ -121,10 +123,10 @@ func (kp *KeyPair) Reset() {
 
 // MarshalJSON 禁止序列化（防止私钥泄露）
 func (kp *KeyPair) MarshalJSON() ([]byte, error) {
-	return nil, errors.New("KeyPair contains private key and cannot be serialized")
+	return nil, errors.New("crypto: KeyPair JSON serialization is disabled to prevent private key leakage; use keymgr.MarshalPrivateKey for explicit encoding")
 }
 
 // UnmarshalJSON 禁止反序列化
 func (kp *KeyPair) UnmarshalJSON(data []byte) error {
-	return errors.New("KeyPair cannot be deserialized")
+	return errors.New("crypto: KeyPair JSON deserialization is disabled; use keymgr.ParsePrivateKeyPair for explicit decoding")
 }

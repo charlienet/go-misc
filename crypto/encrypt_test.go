@@ -1,7 +1,7 @@
 package crypto_test
 
 // 根包契约用例（package crypto_test，blank import symmetric 触发引擎注册）：
-// 枚举/String/Parse/BlockSize/KeySize/哨兵/密钥源互斥/选项×模式校验/
+// 枚举/String/Parse/BlockSize/KeySize/哨兵/密钥源覆盖/选项×模式校验/
 // 选项应用一次/nil 选项等。六模式往返类用例已迁 crypto/symmetric/executor_test.go。
 // 断言文本与迁移前 encrypt_test.go 完全一致。
 
@@ -173,11 +173,22 @@ func TestKeySources(t *testing.T) {
 	decryptAll(ctHex, "WithHexPassword")
 	decryptAll(ctB64, "WithBase64Password")
 
-	// 双源 → ErrConflictingKeySource
-	_, err = crypto.Encrypt(alg, mode, pt, crypto.WithKey(key), crypto.WithKeyPassword("other"))
-	assert.ErrorIs(t, err, crypto.ErrConflictingKeySource)
-	_, err = crypto.Encrypt(alg, mode, pt, crypto.WithHexPassword(hex.EncodeToString(key)), crypto.WithBase64Password("YWJj"))
-	assert.ErrorIs(t, err, crypto.ErrConflictingKeySource)
+	// 测试覆盖行为：第二个选项覆盖第一个
+	// 用 WithKeyPassword 覆盖 WithKey
+	pw := string(key)
+	ct, err := crypto.Encrypt(alg, mode, pt, crypto.WithKey([]byte("wrong_key")), crypto.WithKeyPassword(pw))
+	assert.NoError(t, err)
+	got, err := crypto.Decrypt(alg, mode, ct, crypto.WithKeyPassword(pw))
+	assert.NoError(t, err)
+	assert.Equal(t, pt, got)
+	
+	// 用 WithBase64Password 覆盖 WithHexPassword
+	b64 := base64.StdEncoding.EncodeToString(key)
+	ct2, err := crypto.Encrypt(alg, mode, pt, crypto.WithHexPassword(hex.EncodeToString([]byte("wrong_key"))), crypto.WithBase64Password(b64))
+	assert.NoError(t, err)
+	got2, err := crypto.Decrypt(alg, mode, ct2, crypto.WithBase64Password(b64))
+	assert.NoError(t, err)
+	assert.Equal(t, pt, got2)
 
 	// 全无 → ErrKeyRequired
 	_, err = crypto.Encrypt(alg, mode, pt)

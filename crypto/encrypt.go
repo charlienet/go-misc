@@ -157,58 +157,59 @@ var (
 	ErrPaddingNotSupported       = errors.New("crypto: padding not supported for this mode")
 	ErrAADNotSupported           = errors.New("crypto: AAD only supported for GCM")
 	ErrKeyRequired               = errors.New("crypto: key required (WithKey/WithKeyPassword/WithHexPassword/WithBase64Password)")
-	ErrConflictingKeySource      = errors.New("crypto: key sources are mutually exclusive")
 	ErrInvalidHexPassword        = errors.New("crypto: invalid hex password")
 	ErrInvalidBase64Password     = errors.New("crypto: invalid base64 password")
+	ErrInvalidHexIV              = errors.New("crypto: invalid hex IV")
+	ErrInvalidBase64IV           = errors.New("crypto: invalid base64 IV")
+	ErrInvalidHexNonce           = errors.New("crypto: invalid hex nonce")
+	ErrInvalidBase64Nonce        = errors.New("crypto: invalid base64 nonce")
 	ErrAuthenticationFailed      = errors.New("crypto: message authentication failed")
 	ErrInsecureAlgorithm         = errors.New("crypto: insecure algorithm/mode refused (DES/3DES/ECB); use WithInsecureAlgorithms() to override")
 )
 
 // WithKey 以原始密钥字节提供密钥（内部拷贝保存）。
 // 密钥长度必须与算法严格匹配（AES128=16、AES192=24、AES256=32、SM4=16、DES=8、TripleDES=24）。
+// 多个选项按调用顺序覆盖，后调用的选项会覆盖先调用的选项。
 func WithKey(key []byte) Option {
 	return func(cfg *Config) {
 		cfg.Key = append([]byte(nil), key...)
-		cfg.KeySources++
 	}
 }
 
 // WithKeyPassword 将字符串直接作为密钥字节（[]byte(password)，无 KDF）。
 // 仅适用于 ASCII/可打印文本密钥；二进制密钥请使用 WithKey 或 WithHexPassword/WithBase64Password。
+// 多个选项按调用顺序覆盖，后调用的选项会覆盖先调用的选项。
 func WithKeyPassword(password string) Option {
 	return func(cfg *Config) {
 		cfg.Key = []byte(password)
-		cfg.KeySources++
 	}
 }
 
 // WithHexPassword 将 hex 字符串解码为密钥字节；
 // 解码失败由 Encrypt/Decrypt 返回 ErrInvalidHexPassword。
-func WithHexPassword(hexString string) Option {
+// 多个选项按调用顺序覆盖，后调用的选项会覆盖先调用的选项。
+func WithHexPassword(hexEncoded string) Option {
 	return func(cfg *Config) {
-		key, err := hex.DecodeString(hexString)
+		key, err := hex.DecodeString(hexEncoded)
 		if err != nil {
 			cfg.KeyError = ErrInvalidHexPassword
-			cfg.KeySources++
 			return
 		}
 		cfg.Key = key
-		cfg.KeySources++
 	}
 }
 
 // WithBase64Password 将 Base64（StdEncoding）字符串解码为密钥字节；
 // 解码失败由 Encrypt/Decrypt 返回 ErrInvalidBase64Password。
-func WithBase64Password(encoded string) Option {
+// 多个选项按调用顺序覆盖，后调用的选项会覆盖先调用的选项。
+func WithBase64Password(base64Encoded string) Option {
 	return func(cfg *Config) {
-		key, err := base64.StdEncoding.DecodeString(encoded)
+		key, err := base64.StdEncoding.DecodeString(base64Encoded)
 		if err != nil {
 			cfg.KeyError = ErrInvalidBase64Password
-			cfg.KeySources++
 			return
 		}
 		cfg.Key = key
-		cfg.KeySources++
 	}
 }
 
@@ -223,6 +224,7 @@ func WithBase64Password(encoded string) Option {
 func WithIV(iv []byte) Option {
 	return func(cfg *Config) {
 		cfg.IV = append([]byte(nil), iv...)
+		cfg.IVError = nil  // 清除前者的解码错误
 	}
 }
 
@@ -237,6 +239,67 @@ func WithIV(iv []byte) Option {
 func WithNonce(nonce []byte) Option {
 	return func(cfg *Config) {
 		cfg.Nonce = append([]byte(nil), nonce...)
+		cfg.NonceError = nil  // 清除前者的解码错误
+	}
+}
+
+// WithHexIV 将 hex 字符串解码为 IV 字节；
+// 解码失败由 Encrypt/Decrypt 返回 ErrInvalidHexIV。
+// 语义与 WithIV 相同，多个 IV 选项按调用顺序后者覆盖前者。
+func WithHexIV(hexString string) Option {
+	return func(cfg *Config) {
+		iv, err := hex.DecodeString(hexString)
+		if err != nil {
+			cfg.IVError = ErrInvalidHexIV
+			return
+		}
+		cfg.IV = iv
+		cfg.IVError = nil
+	}
+}
+
+// WithBase64IV 将 Base64（StdEncoding）字符串解码为 IV 字节；
+// 解码失败由 Encrypt/Decrypt 返回 ErrInvalidBase64IV。
+// 语义与 WithIV 相同，多个 IV 选项按调用顺序后者覆盖前者。
+func WithBase64IV(encoded string) Option {
+	return func(cfg *Config) {
+		iv, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			cfg.IVError = ErrInvalidBase64IV
+			return
+		}
+		cfg.IV = iv
+		cfg.IVError = nil
+	}
+}
+
+// WithHexNonce 将 hex 字符串解码为 GCM nonce 字节；
+// 解码失败由 Encrypt/Decrypt 返回 ErrInvalidHexNonce。
+// 语义与 WithNonce 相同，多个 nonce 选项按调用顺序后者覆盖前者。
+func WithHexNonce(hexString string) Option {
+	return func(cfg *Config) {
+		nonce, err := hex.DecodeString(hexString)
+		if err != nil {
+			cfg.NonceError = ErrInvalidHexNonce
+			return
+		}
+		cfg.Nonce = nonce
+		cfg.NonceError = nil
+	}
+}
+
+// WithBase64Nonce 将 Base64（StdEncoding）字符串解码为 GCM nonce 字节；
+// 解码失败由 Encrypt/Decrypt 返回 ErrInvalidBase64Nonce。
+// 语义与 WithNonce 相同，多个 nonce 选项按调用顺序后者覆盖前者。
+func WithBase64Nonce(encoded string) Option {
+	return func(cfg *Config) {
+		nonce, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			cfg.NonceError = ErrInvalidBase64Nonce
+			return
+		}
+		cfg.Nonce = nonce
+		cfg.NonceError = nil
 	}
 }
 
@@ -248,10 +311,10 @@ func WithNonce(nonce []byte) Option {
 //   - CTR：counter(块大小) ‖ 密文（counter 随机前置）
 //   - ECB：密文（无 IV、无前缀）
 //
-// 密钥必须恰好通过一个密钥源选项提供（WithKey/WithKeyPassword/WithHexPassword/
-// WithBase64Password）：多源同现返回 ErrConflictingKeySource，缺源返回 ErrKeyRequired，
-// 长度按算法严格校验。IV/nonce 默认随机生成并前置；也可通过 WithIV/WithNonce
-// 外部提供（密文不含前缀，Decrypt 必须对称传入同一选项）。
+// 密钥必须通过一个密钥源选项提供（WithKey/WithKeyPassword/WithHexPassword/
+// WithBase64Password）：多个选项按调用顺序覆盖，后调用的选项会覆盖先调用的选项。
+// 缺源返回 ErrKeyRequired，长度按算法严格校验。IV/nonce 默认随机生成并前置；
+// 也可通过 WithIV/WithNonce 外部提供（密文不含前缀，Decrypt 必须对称传入同一选项）。
 //
 // 无认证模式（ECB/CBC/CTR）密文可被任意篡改且解密无失败信号，仅限遗留兼容；
 // 推荐使用 GCM（认证加密，篡改返回 ErrAuthenticationFailed）。
@@ -322,6 +385,14 @@ func prepare(alg Algorithm, mode Mode, opts []Option) (Cipher, *Config, error) {
 		return nil, nil, err
 	}
 
+	// 检查 IV/Nonce 解码错误
+	if cfg.IVError != nil {
+		return nil, nil, cfg.IVError
+	}
+	if cfg.NonceError != nil {
+		return nil, nil, cfg.NonceError
+	}
+
 	if cfg.Nonce != nil && len(cfg.Nonce) != nonceSize {
 		return nil, nil, ErrInvalidNonceLength
 	}
@@ -337,21 +408,16 @@ func prepare(alg Algorithm, mode Mode, opts []Option) (Cipher, *Config, error) {
 	return c, cfg, nil
 }
 
-// resolveKey 解析密钥源：四源互斥（恰好一个）、缺源与解码错误检查。
-// 直接消费 prepare 单次应用后的 cfg（KeySources 计数由各密钥源选项内部累计），
-// 不再重复应用选项。
+// resolveKey 解析密钥源：检查解码错误和是否提供了密钥。
+// 直接消费 prepare 单次应用后的 cfg，不进行互斥检查。
 func resolveKey(cfg *Config) ([]byte, error) {
-	switch {
-	case cfg.KeySources == 0:
-		return nil, ErrKeyRequired
-	case cfg.KeySources > 1:
-		return nil, ErrConflictingKeySource
-	}
-
-	// 唯一密钥源：hex/base64 解码失败（KeyError）直接返回对应哨兵；
+	// 检查 hex/base64 解码失败（KeyError）直接返回对应哨兵；
 	// 其余情况返回密钥字节（WithKey/WithKeyPassword 的 KeyError 恒为 nil）。
 	if cfg.KeyError != nil {
 		return nil, cfg.KeyError
+	}
+	if len(cfg.Key) == 0 {
+		return nil, ErrKeyRequired
 	}
 	return cfg.Key, nil
 }

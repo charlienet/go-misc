@@ -9,7 +9,7 @@ import (
 // NewEncryptor 创建可复用对称加密对象。
 //
 // 构造流程与包级 Encrypt/Decrypt 完全同一管线（prepare）：枚举范围校验 →
-// 选项应用（仅一次）→ 密钥四源互斥解析 → 算法×模式兼容（GCM 拒绝
+// 选项应用（仅一次）→ 密钥源解析（多个选项按调用顺序覆盖）→ 算法×模式兼容（GCM 拒绝
 // DES/TripleDES）→ 选项×模式校验 → IV/nonce 长度校验；随后经
 // ModeExecutorFor 缓存对应模式的执行器（无状态），并冻结配置快照
 // （IV/Nonce 再次拷贝，与外部传入切片彻底隔离；Key 为敏感密钥字节，
@@ -44,7 +44,6 @@ func NewEncryptor(alg Algorithm, mode Mode, opts ...Option) (*Encryptor, error) 
 	// 密钥字节仅构造期使用（Cipher 已持有内部拷贝），及时清零擦除。
 	common.ZeroBytes(cfg.Key)
 	cfg.Key = nil
-	cfg.KeySources = 0
 	cfg.KeyError = nil
 
 	return &Encryptor{alg: alg, mode: mode, c: c, cfg: frozen, executor: ex}, nil

@@ -45,7 +45,7 @@ func TestKeyPair_MarshalJSON_Forbidden(t *testing.T) {
 
 	_, err := kp.MarshalJSON()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot be serialized")
+	assert.Contains(t, err.Error(), "serialization is disabled")
 }
 
 func TestKeyPair_UnmarshalJSON_Forbidden(t *testing.T) {
@@ -53,7 +53,7 @@ func TestKeyPair_UnmarshalJSON_Forbidden(t *testing.T) {
 
 	err := kp.UnmarshalJSON([]byte("{}"))
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot be deserialized")
+	assert.Contains(t, err.Error(), "deserialization is disabled")
 }
 
 // --- JSON 序列化绕过防护测试（P0 安全修复） ---
