@@ -18,7 +18,7 @@
 //
 // 可复用加密对象（构造一次，多次加解密，方法级并发安全）：
 //
-//	e, err := symmetric.New(crypto.AES128, crypto.GCM, symmetric.WithKey(key))
+//	e, err := crypto.NewEncryptor(crypto.AES128, crypto.GCM, crypto.WithKey(key))
 //	if err != nil {
 //		return err
 //	}
