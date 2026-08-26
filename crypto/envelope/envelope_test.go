@@ -1,13 +1,17 @@
-package crypto
+package envelope
 
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	rootcrypto "github.com/charlienet/go-misc/crypto"
 )
 
 // ==================== gcx1 往返测试 ====================
@@ -71,16 +75,120 @@ func TestGCX1_Structure(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 验证总长度：header(7) + nonce(12) + ciphertext(4) + tag(16) = 39
-	assert.Equal(t, gcx1HeaderLen+gcx1NonceLen+len(plaintext)+TagSize, len(envelope))
+	assert.Equal(t, gcx1HeaderLen+gcx1NonceLen+len(plaintext)+gcx1TagLen, len(envelope))
 
 	// 验证 header
 	assert.Equal(t, byte('g'), envelope[0])
 	assert.Equal(t, byte('c'), envelope[1])
 	assert.Equal(t, byte('x'), envelope[2])
 	assert.Equal(t, byte('1'), envelope[3])
-	assert.Equal(t, byte(gcx1Version), envelope[4])
+	assert.Equal(t, byte(gcx1VersionV2), envelope[4], "新加密输出应为 v2 版本")
 	assert.Equal(t, algIDAES128, envelope[5])
 	assert.Equal(t, byte(gcx1NonceLen), envelope[6])
+}
+
+// ==================== v1 兼容读取（gcx1 v2 演进） ====================
+
+func TestGCX1_V1Compatibility(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	plaintext := []byte("legacy v1 data")
+
+	// 手工构造 v1 信封：GCM 无 AAD（v1 冻结格式）
+	c, err := rootcrypto.NewCipher("AES-128", key)
+	require.NoError(t, err)
+	gcm, err := c.NewGCMWithRandomNonce() // embednonce=true，输出 nonce||ct||tag
+	require.NoError(t, err)
+	sealed, err := gcm.Encrypt(plaintext)
+	require.NoError(t, err)
+
+	envelope := make([]byte, 0, gcx1HeaderLen+len(sealed))
+	envelope = append(envelope, gcx1Magic...)
+	envelope = append(envelope, gcx1Version) // v1 版本号
+	envelope = append(envelope, algIDAES128)
+	envelope = append(envelope, gcx1NonceLen)
+	envelope = append(envelope, sealed...)
+
+	decrypted, err := Decrypt(key, envelope)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+}
+
+// TestGCX1_V1Compatibility_WithAAD 验证 v1 信封 + 用户 AAD 的兼容语义：
+// v1 冻结格式无 header meta AAD，但用户 AAD（若有）始终参与 GCM 认证。
+func TestGCX1_V1Compatibility_WithAAD(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	plaintext := []byte("legacy v1 data with aad")
+	userAAD := []byte("user-context-aad")
+
+	// 手工构造 v1 信封：GCM AAD = 用户 AAD（v1 无 header meta AAD）
+	c, err := rootcrypto.NewCipher("AES-128", key)
+	require.NoError(t, err)
+	gcm, err := c.NewGCM(nil, rootcrypto.WithAAD(userAAD), rootcrypto.EmbedNonce()) // embednonce=true，输出 nonce||ct||tag
+	require.NoError(t, err)
+	sealed, err := gcm.Encrypt(plaintext)
+	require.NoError(t, err)
+
+	envelope := make([]byte, 0, gcx1HeaderLen+len(sealed))
+	envelope = append(envelope, gcx1Magic...)
+	envelope = append(envelope, gcx1Version) // v1 版本号
+	envelope = append(envelope, algIDAES128)
+	envelope = append(envelope, gcx1NonceLen)
+	envelope = append(envelope, sealed...)
+
+	// 正向：v1 信封 + 相同用户 AAD → DecryptWithAAD 往返成功
+	decrypted, err := DecryptWithAAD(key, envelope, userAAD)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
+
+	// 负向：v1 信封（带用户 AAD 加密）按"无 AAD 的 v2 语义"解密必须失败——
+	// 将 version 篡改为 v2 后走 v2 分支（GCM AAD = header meta），
+	// 与加密时的 GCM AAD（= 用户 AAD）不一致，GCM 认证必须拒绝。
+	downgraded := make([]byte, len(envelope))
+	copy(downgraded, envelope)
+	downgraded[4] = byte(gcx1VersionV2)
+	_, err = Decrypt(key, downgraded)
+	assert.Error(t, err, "v1+用户AAD 密文按无 AAD 的 v2 语义解密必须失败")
+
+	// 负向补充：保持 v1 版本但用无 AAD 的 Decrypt（v1 分支 GCM AAD = nil）同样必须失败
+	_, err = Decrypt(key, envelope)
+	assert.Error(t, err, "v1+用户AAD 密文按无 AAD 的 v1 语义解密必须失败")
+}
+
+// ==================== v2 header 篡改防护（header 入 GCM AAD） ====================
+
+func TestGCX1_V2_HeaderTamper(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	envelope, err := Encrypt("AES-128", key, []byte("test"))
+	require.NoError(t, err)
+	assert.Equal(t, byte(gcx1VersionV2), envelope[4])
+
+	// 篡改 header 各元数据字节：v2 下必须解密失败（前置校验或 GCM 认证拒绝）
+	cases := []struct {
+		name string
+		idx  int
+		val  byte
+	}{
+		{"magic", 0, 'X'},
+		{"version", 4, 0x03},
+		{"algID", 5, algIDSM4}, // 篡改为合法算法 ID：由 GCM AAD 认证拒绝
+		{"nonceLen", 6, 0x08},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tampered := make([]byte, len(envelope))
+			copy(tampered, envelope)
+			tampered[tc.idx] = tc.val
+			_, err := Decrypt(key, tampered)
+			assert.Error(t, err, "篡改 %s 应解密失败", tc.name)
+		})
+	}
+
+	// 篡改 algID 为未知值：errGcx1UnknownAlgID（前置校验拦截）
+	unknown := make([]byte, len(envelope))
+	copy(unknown, envelope)
+	unknown[5] = 0xFF
+	_, err = Decrypt(key, unknown)
+	assert.ErrorIs(t, err, errGcx1UnknownAlgID)
 }
 
 // ==================== 空明文往返 ====================
@@ -144,13 +252,20 @@ func TestGCX1_Tamper_Magic(t *testing.T) {
 func TestGCX1_Tamper_Version(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	// 新加密输出为 v2
+	assert.Equal(t, byte(gcx1VersionV2), envelope[4])
 
+	// v2 密文：篡改 version 为未知值（0x03）→ 版本检查拒绝
 	tampered := make([]byte, len(envelope))
 	copy(tampered, envelope)
-	tampered[4] = 0x02 // 无效版本
-
+	tampered[4] = 0x03 // 未知版本
 	_, err := Decrypt(key, tampered)
 	assert.ErrorIs(t, err, errGcx1VersionMismatch)
+
+	// v2 密文：降级篡改为 v1 → 走 v1 路径（AAD=nil）→ GCM 认证失败
+	tampered[4] = byte(gcx1Version)
+	_, err = Decrypt(key, tampered)
+	assert.Error(t, err, "降级篡改 version 应导致 GCM 认证失败")
 }
 
 func TestGCX1_Tamper_AlgID(t *testing.T) {
@@ -303,80 +418,30 @@ func TestGCX1_TooShort(t *testing.T) {
 	assert.ErrorIs(t, err, errGcx1TooShort)
 }
 
-// ==================== NormalizeAlgorithm ====================
+// ==================== 泛名 AES 语义（文档化拒绝） ====================
+// 泛名 "AES" 仅低层 NewCipher 支持（16/24/32 字节密钥按长度确定算法）；
+// 高层 Encrypt 会将泛名归一化为 "AES-128"，密钥长度非 16 字节时返回错误，
+// 调用方应改用精确算法名（AES-192/AES-256）。
+func TestGCX1_Encrypt_GenericAES_Behavior(t *testing.T) {
+	plaintext := []byte("generic aes behavior")
 
-func TestNormalizeAlgorithm_ExactMatch(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"SM4", AlgorithmSM4},
-		{"AES-128", AlgorithmAES128},
-		{"AES-192", AlgorithmAES192},
-		{"AES-256", AlgorithmAES256},
-		{"DES", AlgorithmDES},
-		{"3DES", Algorithm3DES},
-		{"SM2", AlgorithmSM2},
-		{"RSA", AlgorithmRSA},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := NormalizeAlgorithm(tt.input)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
+	// 16 字节密钥：归一化 "AES-128" 恰好匹配，加密并往返成功
+	key16 := []byte("0123456789abcdef")
+	envelope, err := Encrypt("AES", key16, plaintext)
+	assert.NoError(t, err)
+	decrypted, err := Decrypt(key16, envelope)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, decrypted)
 
-func TestNormalizeAlgorithm_CaseInsensitive(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"sm4", AlgorithmSM4},
-		{"Sm4", AlgorithmSM4},
-		{"aes-128", AlgorithmAES128},
-		{"aes-192", AlgorithmAES192},
-		{"aes-256", AlgorithmAES256},
-		{"des", AlgorithmDES},
-		{"3des", Algorithm3DES},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := NormalizeAlgorithm(tt.input)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestNormalizeAlgorithm_Alias(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"AES", AlgorithmAES128}, // "AES" 默认归一为 AES-128
-		{"aes", AlgorithmAES128},
-		{"AES128", AlgorithmAES128}, // 去除连字符匹配
-		{"aes128", AlgorithmAES128},
-		{"AES192", AlgorithmAES192},
-		{"aes192", AlgorithmAES192},
-		{"AES256", AlgorithmAES256},
-		{"aes256", AlgorithmAES256},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := NormalizeAlgorithm(tt.input)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestNormalizeAlgorithm_Unknown(t *testing.T) {
-	_, err := NormalizeAlgorithm("BLOWFISH")
+	// 24 字节密钥：归一化 "AES-128" 与密钥长度不匹配，必须报错
+	_, err = Encrypt("AES", []byte("0123456789abcdef01234567"), plaintext)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported algorithm")
+	assert.Contains(t, err.Error(), "invalid key length")
+
+	// 32 字节密钥：同上，必须报错
+	_, err = Encrypt("AES", []byte("0123456789abcdef0123456789abcdef"), plaintext)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid key length")
 }
 
 // ==================== 并发测试 ====================
@@ -484,8 +549,8 @@ func TestGCX1_WrongKey(t *testing.T) {
 // ==================== 大数据量测试 ====================
 
 func TestGCX1_LargePlaintext(t *testing.T) {
-	key := []byte("0123456789abcdef")
-	plaintext := make([]byte, 1024*1024) // 1MB
+	key := []byte("0123456789abcdef0123456789abcdef") // AES-256: 32 bytes
+	plaintext := make([]byte, 1024*1024)              // 1MB
 	_, err := io.ReadFull(rand.Reader, plaintext)
 	assert.NoError(t, err)
 
@@ -495,4 +560,87 @@ func TestGCX1_LargePlaintext(t *testing.T) {
 	decrypted, err := Decrypt(key, envelope)
 	assert.NoError(t, err)
 	assert.Equal(t, plaintext, decrypted)
+}
+
+// ==================== 冻结格式黄金向量（KAT） ====================
+// KAT（Known Answer Test）以固定 key/明文/布局手工构造密文字节并固化为
+// 字面量常量，独立锚定 gcx1 v1/v2 冻结格式。与"用当前库现造"的白盒测试
+// 互为反证：白盒构造与实现同源，格式漂移会同步漂移；KAT 不依赖运行时生成，
+// 实现或测试任何一处改动格式（header 布局、版本字节、nonce 位置、AAD 语义、
+// 密文/tag 长度），KAT 断言即失败。
+//
+// 生成方法（一次性，随本测试固化，非运行时生成）：
+//   - key = "0123456789abcdef"（AES-128）、明文 = "hello, gcx1 kat!"、
+//     nonce = 全零 12B、algID = 0x02（AES-128）。
+//   - v1：GCM 无 AAD 加密，信封 = magic(4) || 0x01 || 0x02 || 0x0C ||
+//     nonce(12B) || 密文(16B) || tag(16B)。
+//   - v2：GCM AAD = header 元数据 7 字节（magic||0x02||0x02||0x0C），
+//     其余布局同 v1。v1/v2 密文区相同（CTR 密文与 AAD 无关），仅 tag 不同，
+//     直观体现"AAD 只认证不加密"。
+const (
+	gcx1KATKey   = "0123456789abcdef"
+	gcx1KATPlain = "hello, gcx1 kat!"
+	gcx1KATNonce = "000000000000000000000000"
+	// gcx1 v1 KAT 密文：67637831 0102 0c | 00×12 | 2a87...4ca3(16B) | 79f5...1407(16B)
+	gcx1KATV1Hex = "6763783101020c000000000000000000000000" +
+		"2a87462996a6aca4ec2ea090cecd4ca3" +
+		"79f59da024f00da6ddd6a932424e1407"
+	// gcx1 v2 KAT 密文：同上布局，version=0x02，tag 不同（AAD=header meta 7B）
+	gcx1KATV2Hex = "6763783102020c000000000000000000000000" +
+		"2a87462996a6aca4ec2ea090cecd4ca3" +
+		"a58c5e8be0017aa0e772c4372a4ed928"
+)
+
+// gcx1KATDecrypt 将 KAT hex 常量解码并解密，返回明文与信封字节。
+func gcx1KATDecrypt(t *testing.T, hexStr string) ([]byte, []byte) {
+	t.Helper()
+	env, err := hex.DecodeString(hexStr)
+	require.NoError(t, err, "KAT hex 常量必须可解码")
+	pt, err := Decrypt([]byte(gcx1KATKey), env)
+	require.NoError(t, err, "KAT 密文必须能被当前实现解密")
+	return pt, env
+}
+
+func TestGCX1_KAT_V1(t *testing.T) {
+	pt, env := gcx1KATDecrypt(t, gcx1KATV1Hex)
+	assert.Equal(t, []byte(gcx1KATPlain), pt)
+	// 布局锚定：v1 版本字节、nonce 区与常量一致、total 长度（7+12+16+16=51）
+	assert.Equal(t, byte(gcx1Version), env[4])
+	assert.Equal(t, gcx1KATNonce, hex.EncodeToString(env[gcx1HeaderLen:gcx1HeaderLen+gcx1NonceLen]))
+	assert.Equal(t, len(env), gcx1HeaderLen+gcx1NonceLen+len(pt)+gcx1TagLen)
+}
+
+func TestGCX1_KAT_V2(t *testing.T) {
+	pt, env := gcx1KATDecrypt(t, gcx1KATV2Hex)
+	assert.Equal(t, []byte(gcx1KATPlain), pt)
+	assert.Equal(t, byte(gcx1VersionV2), env[4])
+	assert.Equal(t, gcx1KATNonce, hex.EncodeToString(env[gcx1HeaderLen:gcx1HeaderLen+gcx1NonceLen]))
+	assert.Equal(t, len(env), gcx1HeaderLen+gcx1NonceLen+len(pt)+gcx1TagLen)
+}
+
+// TestGCX1_KAT_TamperAnyByte 篡改 KAT 密文任一字节，解密必须失败：
+// header 字节被前置校验（magic/version/algID/nonceLen）拒绝；
+// nonce/密文/tag 字节被 GCM 认证拒绝；v1 降级 v2 / v2 降级 v1 因 AAD 语义
+// 不同同样被 GCM 认证拒绝。
+func TestGCX1_KAT_TamperAnyByte(t *testing.T) {
+	cases := []struct {
+		name   string
+		hexStr string
+	}{
+		{"v1", gcx1KATV1Hex},
+		{"v2", gcx1KATV2Hex},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, err := hex.DecodeString(tc.hexStr)
+			require.NoError(t, err)
+			for i := range env {
+				orig := env[i]
+				env[i] = orig ^ 0xFF
+				_, err := Decrypt([]byte(gcx1KATKey), env)
+				assert.Error(t, err, "篡改字节 %d 应解密失败", i)
+				env[i] = orig
+			}
+		})
+	}
 }

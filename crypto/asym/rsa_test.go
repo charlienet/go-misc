@@ -1,4 +1,4 @@
-package crypto
+package asym_test
 
 import (
 	"crypto"
@@ -12,7 +12,10 @@ import (
 	"sync"
 	"testing"
 
+	rootcrypto "github.com/charlienet/go-misc/crypto"
+	_ "github.com/charlienet/go-misc/crypto/keymgr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // 包级共享的 2048 位测试密钥对：懒生成一次，供多个用例复用，
@@ -36,7 +39,7 @@ func getTestRSAPair(t *testing.T) *rsa.PrivateKey {
 }
 
 // newTestRSAAlgo 以共享 2048 位密钥构造 Asymmetric 实例。
-func newTestRSAAlgo(t *testing.T) Asymmetric {
+func newTestRSAAlgo(t *testing.T) rootcrypto.Asymmetric {
 	t.Helper()
 	prv := getTestRSAPair(t)
 
@@ -49,9 +52,9 @@ func newTestRSAAlgo(t *testing.T) Asymmetric {
 		t.Fatal(err)
 	}
 
-	s, err := NewAsymmetric("RSA",
-		WithPrivateKey(base64.StdEncoding.EncodeToString(prkBytes)),
-		WithPublicKey(base64.StdEncoding.EncodeToString(pubBytes)),
+	s, err := rootcrypto.NewAsymmetric(rootcrypto.RSA,
+		rootcrypto.WithPrivateKey(base64.StdEncoding.EncodeToString(prkBytes)),
+		rootcrypto.WithPublicKey(base64.StdEncoding.EncodeToString(pubBytes)),
 	)
 	if err != nil {
 		t.Fatalf("构造 RSA 算法实例失败: %v", err)
@@ -114,6 +117,17 @@ func TestRSAStandardPSSInterop(t *testing.T) {
 
 	err = rsa.VerifyPSS(&prv.PublicKey, crypto.SHA256, digest, projSig, nil)
 	assert.NoError(t, err, "标准库 VerifyPSS 拒绝项目签名")
+
+	// 显式盐长互操作：项目 Sign/Verify 内部使用 PSSSaltLengthEqualsHash，
+	// 标准库以相同盐长策略签名/验证应完全互通。
+	explicitOpts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
+
+	stdSigExplicit, err := rsa.SignPSS(rand.Reader, prv, crypto.SHA256, digest, explicitOpts)
+	assert.NoError(t, err, "标准库 SignPSS（显式盐长）失败")
+	assert.True(t, s.Verify(msg, stdSigExplicit), "项目 Verify 拒绝显式盐长的标准库签名")
+
+	err = rsa.VerifyPSS(&prv.PublicKey, crypto.SHA256, digest, projSig, explicitOpts)
+	assert.NoError(t, err, "标准库以显式盐长 VerifyPSS 拒绝项目签名")
 }
 
 // TestRSAWeakKeyRejected：1024 位弱密钥构造应被拒绝（A 库 fail-fast 语义）。
@@ -125,7 +139,7 @@ func TestRSAWeakKeyRejected(t *testing.T) {
 	prkB64 := base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(weakKey))
 
 	// A 库 fail-fast 语义：1024 位弱私钥在构造期应被拒绝
-	_, err = NewAsymmetric("RSA", WithPrivateKey(prkB64))
+	_, err = rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKey(prkB64))
 	assert.Error(t, err, "1024 位弱私钥应被拒绝，实际被接受")
 	assert.True(t, strings.Contains(err.Error(), "too weak"),
 		"弱密钥错误信息不符合预期: %v", err)
@@ -134,7 +148,7 @@ func TestRSAWeakKeyRejected(t *testing.T) {
 // ==================== RSA Name ====================
 
 func TestRSA_Name(t *testing.T) {
-	s, err := NewAsymmetric("RSA")
+	s, err := rootcrypto.NewAsymmetric(rootcrypto.RSA)
 	assert.NoError(t, err)
 	assert.Equal(t, "RSA", s.Name())
 }
@@ -142,7 +156,7 @@ func TestRSA_Name(t *testing.T) {
 // ==================== RSA ExportPublicKey ====================
 
 func TestRSA_ExportPublicKey(t *testing.T) {
-	s, err := NewAsymmetric("RSA")
+	s, err := rootcrypto.NewAsymmetric(rootcrypto.RSA)
 	assert.NoError(t, err)
 
 	kp, err := s.GenerateKey()
@@ -150,7 +164,7 @@ func TestRSA_ExportPublicKey(t *testing.T) {
 	assert.NotEmpty(t, kp.PrivateKey)
 
 	// 仅设置私钥
-	signer, err := NewAsymmetric("RSA", WithPrivateKeyObject(kp.PrivateKey))
+	signer, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKeyObject(kp.PrivateKey))
 	assert.NoError(t, err)
 
 	pubB64, err := signer.ExportPublicKey()
@@ -158,7 +172,7 @@ func TestRSA_ExportPublicKey(t *testing.T) {
 	assert.NotEmpty(t, pubB64)
 
 	// 用导出的公钥回读并验证签名
-	verifier, err := NewAsymmetric("RSA", WithPublicKey(pubB64))
+	verifier, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKey(pubB64))
 	assert.NoError(t, err)
 
 	msg := []byte("test export roundtrip")
@@ -167,10 +181,33 @@ func TestRSA_ExportPublicKey(t *testing.T) {
 	assert.True(t, verifier.Verify(msg, sig))
 }
 
+// TestRSA_ExportPublicKey_PublicKeyOnly：仅注入公钥时也应能导出公钥（与 ECDSA 行为对齐）。
+func TestRSA_ExportPublicKey_PublicKeyOnly(t *testing.T) {
+	prv := getTestRSAPair(t)
+
+	pubBytes, err := x509.MarshalPKIXPublicKey(&prv.PublicKey)
+	require.NoError(t, err)
+	pubB64 := base64.StdEncoding.EncodeToString(pubBytes)
+
+	// 仅注入公钥：ExportPublicKey 回退导出公钥
+	pubOnly, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKey(pubB64))
+	require.NoError(t, err)
+
+	exported, err := pubOnly.ExportPublicKey()
+	require.NoError(t, err)
+	assert.Equal(t, pubB64, exported, "导出结果应与注入公钥一致")
+
+	// 无任何密钥时仍应报错（行为不变）
+	empty, err := rootcrypto.NewAsymmetric(rootcrypto.RSA)
+	require.NoError(t, err)
+	_, err = empty.ExportPublicKey()
+	assert.Error(t, err)
+}
+
 // ==================== RSA nil key paths ====================
 
 func TestRSA_NilKeyPaths(t *testing.T) {
-	s, err := NewAsymmetric("RSA")
+	s, err := rootcrypto.NewAsymmetric(rootcrypto.RSA)
 	assert.NoError(t, err)
 
 	_, err = s.Encrypt([]byte("test"))
@@ -188,7 +225,7 @@ func TestRSA_NilKeyPaths(t *testing.T) {
 // ==================== RSA WithPrivateKey 无效 base64 ====================
 
 func TestRSA_WithPrivateKey_InvalidBase64(t *testing.T) {
-	_, err := NewAsymmetric("RSA", WithPrivateKey("!!!not-base64!!!"))
+	_, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKey("!!!not-base64!!!"))
 	assert.Error(t, err)
 }
 
@@ -201,7 +238,7 @@ func TestRSA_WithPrivateKey_NonRSAKey(t *testing.T) {
 	prkBytes, err := x509.MarshalPKCS8PrivateKey(ecdsaKey)
 	assert.NoError(t, err)
 
-	_, err = NewAsymmetric("RSA", WithPrivateKey(base64.StdEncoding.EncodeToString(prkBytes)))
+	_, err = rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKey(base64.StdEncoding.EncodeToString(prkBytes)))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not an RSA private key")
 }
@@ -209,14 +246,14 @@ func TestRSA_WithPrivateKey_NonRSAKey(t *testing.T) {
 // ==================== RSA WithPublicKey 无效 base64 ====================
 
 func TestRSA_WithPublicKey_InvalidBase64(t *testing.T) {
-	_, err := NewAsymmetric("RSA", WithPublicKey("!!!not-base64!!!"))
+	_, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKey("!!!not-base64!!!"))
 	assert.Error(t, err)
 }
 
 // ==================== RSA WithPublicKey 解析错误 ====================
 
 func TestRSA_WithPublicKey_ParserError(t *testing.T) {
-	_, err := NewAsymmetric("RSA", WithPublicKey(base64.StdEncoding.EncodeToString([]byte("not-valid-spki"))))
+	_, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKey(base64.StdEncoding.EncodeToString([]byte("not-valid-spki"))))
 	assert.Error(t, err)
 }
 
@@ -229,7 +266,7 @@ func TestRSA_WithPublicKey_NotRSAKey(t *testing.T) {
 	pubBytes, err := x509.MarshalPKIXPublicKey(&ecdsaKey.PublicKey)
 	assert.NoError(t, err)
 
-	_, err = NewAsymmetric("RSA", WithPublicKey(base64.StdEncoding.EncodeToString(pubBytes)))
+	_, err = rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKey(base64.StdEncoding.EncodeToString(pubBytes)))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not an RSA public key")
 }
@@ -243,7 +280,102 @@ func TestRSA_WithPublicKey_WeakKey(t *testing.T) {
 	pubBytes, err := x509.MarshalPKIXPublicKey(&weakKey.PublicKey)
 	assert.NoError(t, err)
 
-	_, err = NewAsymmetric("RSA", WithPublicKey(base64.StdEncoding.EncodeToString(pubBytes)))
+	_, err = rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKey(base64.StdEncoding.EncodeToString(pubBytes)))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "too weak")
+}
+
+// ==================== 共享实例失效可检测（P1 A2） ====================
+
+func TestSharedInstance_SignAfterReset(t *testing.T) {
+	kp, err := rootcrypto.GenerateKeyPair(rootcrypto.RSA)
+	require.NoError(t, err)
+
+	// NewAsymmetric 实例持有 KeyPair 同一私钥指针
+	signer, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKeyObject(kp.PrivateKey))
+	require.NoError(t, err)
+	// Decrypt 实例同样须在 Reset 前构造（持有同一私钥指针），
+	// 才能命中 Validate 清零检测而非 nil 检查路径。
+	dec, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKeyObject(kp.PrivateKey))
+	require.NoError(t, err)
+
+	msg := []byte("before reset")
+	sig, err := signer.Sign(msg)
+	require.NoError(t, err)
+	assert.NotEmpty(t, sig)
+
+	// Reset 清零共享密钥后：Sign 必须返回 error，而非静默产出伪签名
+	kp.Reset()
+	require.NotPanics(t, func() {
+		_, err = signer.Sign(msg)
+	})
+	assert.Error(t, err)
+
+	// Decrypt 同理：错误信息须含 "invalid"（命中 Validate 清零检测），
+	// 而非 "not set"（nil 检查）——证明验证的是 Reset 清零路径。
+	require.NotPanics(t, func() {
+		_, err = dec.Decrypt([]byte("ciphertext"))
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+	assert.NotContains(t, err.Error(), "not set")
+}
+
+// ==================== RSA 加解密（自根包 crypto_test.go 迁入） ====================
+
+func TestRSA_SignAndVerify(t *testing.T) {
+	// 生成密钥对
+	rsaAlgo, err := rootcrypto.NewAsymmetric(rootcrypto.RSA)
+	assert.NoError(t, err)
+
+	keyPair, err := rsaAlgo.GenerateKey()
+	assert.NoError(t, err)
+	assert.NotEmpty(t, keyPair.PrivateKey)
+	assert.NotEmpty(t, keyPair.PublicKey)
+
+	// 创建新的实例并设置私钥用于签名
+	signer, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKeyObject(keyPair.PrivateKey))
+	assert.NoError(t, err)
+
+	// 签名
+	message := []byte("test message")
+	signature, err := signer.Sign(message)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, signature)
+
+	// 创建新实例设置公钥用于验证
+	verifier, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPublicKeyObject(keyPair.PublicKey))
+	assert.NoError(t, err)
+
+	// 验证
+	valid := verifier.Verify(message, signature)
+	assert.True(t, valid)
+
+	// 验证错误消息
+	invalid := verifier.Verify([]byte("wrong message"), signature)
+	assert.False(t, invalid)
+}
+
+func TestRSA_EncryptAndDecrypt(t *testing.T) {
+	// 生成密钥对
+	rsaAlgo, err := rootcrypto.NewAsymmetric(rootcrypto.RSA)
+	assert.NoError(t, err)
+
+	keyPair, err := rsaAlgo.GenerateKey()
+	assert.NoError(t, err)
+
+	// 创建新实例设置密钥
+	algo, err := rootcrypto.NewAsymmetric(rootcrypto.RSA, rootcrypto.WithPrivateKeyObject(keyPair.PrivateKey), rootcrypto.WithPublicKeyObject(keyPair.PublicKey))
+	assert.NoError(t, err)
+
+	// 加密
+	plaintext := []byte("secret message")
+	ciphertext, err := algo.Encrypt(plaintext)
+	assert.NoError(t, err)
+	assert.NotEqual(t, plaintext, []byte(ciphertext))
+
+	// 解密
+	decrypted, err := algo.Decrypt(ciphertext)
+	assert.NoError(t, err)
+	assert.Equal(t, plaintext, []byte(decrypted))
 }

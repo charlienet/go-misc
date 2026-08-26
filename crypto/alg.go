@@ -18,34 +18,25 @@ const (
 	AlgorithmED25519 = "ED25519"
 )
 
-// algorithmID 是 gcx1 信封中的算法标识字节。
-const (
-	algIDSM4    byte = 0x01
-	algIDAES128 byte = 0x02
-	algIDAES192 byte = 0x03
-	algIDAES256 byte = 0x04
-	algIDDES    byte = 0x05
-	algID3DES   byte = 0x06
-)
-
-// algorithmIDMap 将算法常量名映射到 gcx1 algID 字节。
-var algorithmIDMap = map[string]byte{
-	AlgorithmSM4:    algIDSM4,
-	AlgorithmAES128: algIDAES128,
-	AlgorithmAES192: algIDAES192,
-	AlgorithmAES256: algIDAES256,
-	AlgorithmDES:    algIDDES,
-	Algorithm3DES:   algID3DES,
-}
-
-// idAlgorithmMap 将 gcx1 algID 字节映射回算法常量名。
-var idAlgorithmMap = map[byte]string{
-	algIDSM4:    AlgorithmSM4,
-	algIDAES128: AlgorithmAES128,
-	algIDAES192: AlgorithmAES192,
-	algIDAES256: AlgorithmAES256,
-	algIDDES:    AlgorithmDES,
-	algID3DES:   Algorithm3DES,
+// algorithmNameMap 算法名归一化查找表（大写键 → 标准算法常量）。
+// 包级只读变量，避免 NormalizeAlgorithm 每次调用重建 map，且并发只读安全。
+var algorithmNameMap = map[string]string{
+	"SM4":     AlgorithmSM4,
+	"AES-128": AlgorithmAES128,
+	"AES-192": AlgorithmAES192,
+	"AES-256": AlgorithmAES256,
+	"AES":     AlgorithmAES128, // 默认 AES 归一为 AES-128
+	"DES":     AlgorithmDES,
+	"3DES":    Algorithm3DES,
+	"SM2":     AlgorithmSM2,
+	"RSA":     AlgorithmRSA,
+	"AES128":  AlgorithmAES128, // 紧凑别名
+	"AES192":  AlgorithmAES192,
+	"AES256":  AlgorithmAES256,
+	"ECDH":    AlgorithmECDH,
+	"X25519":  AlgorithmX25519,
+	"ECDSA":   AlgorithmECDSA,
+	"ED25519": AlgorithmED25519,
 }
 
 // NormalizeAlgorithm 将算法名称归一化为标准形式。
@@ -53,39 +44,20 @@ var idAlgorithmMap = map[byte]string{
 // "aes128"/"aes-128"/"AES128" 归一为 "AES-128"，同理 192/256；
 // "sm4"/"SM4" 归一为 "SM4"；未知算法返回 error。
 func NormalizeAlgorithm(name string) (string, error) {
-	upper := map[string]string{
-		"SM4":     AlgorithmSM4,
-		"AES-128": AlgorithmAES128,
-		"AES-192": AlgorithmAES192,
-		"AES-256": AlgorithmAES256,
-		"AES":     AlgorithmAES128, // 默认 AES 归一为 AES-128
-		"DES":     AlgorithmDES,
-		"3DES":    Algorithm3DES,
-		"SM2":     AlgorithmSM2,
-		"RSA":     AlgorithmRSA,
-		"AES128":  AlgorithmAES128, // 紧凑别名
-		"AES192":  AlgorithmAES192,
-		"AES256":  AlgorithmAES256,
-		"ECDH":    AlgorithmECDH,
-		"X25519":  AlgorithmX25519,
-		"ECDSA":   AlgorithmECDSA,
-		"ED25519": AlgorithmED25519,
-	}
-
 	// 直接精确匹配
-	if v, ok := upper[name]; ok {
+	if v, ok := algorithmNameMap[name]; ok {
 		return v, nil
 	}
 
 	// 尝试大写匹配
 	upperName := toUpperASCII(name)
-	if v, ok := upper[upperName]; ok {
+	if v, ok := algorithmNameMap[upperName]; ok {
 		return v, nil
 	}
 
 	// 别名处理：去除连字符再匹配
 	compact := compactName(upperName)
-	if v, ok := upper[compact]; ok {
+	if v, ok := algorithmNameMap[compact]; ok {
 		return v, nil
 	}
 

@@ -1,4 +1,4 @@
-package crypto
+package asym
 
 import (
 	"crypto"
@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/charlienet/go-misc/bytesconv"
+	rootcrypto "github.com/charlienet/go-misc/crypto"
 )
 
 type rsa_algo struct {
@@ -19,44 +20,41 @@ type rsa_algo struct {
 	bits int
 }
 
-func new_rsa(opts ...keyFunc) (Asymmetric, error) {
-	key := asymmetric{
-		hash: crypto.SHA256,
-		bits: 2048,
-	}
-
+// newRSA 构造 RSA 非对称算法实例（注册表工厂签名）。
+func newRSA(opts ...rootcrypto.AsymOption) (rootcrypto.Asymmetric, error) {
+	cfg := &rootcrypto.AsymConfig{}
 	for _, opt := range opts {
-		if err := opt(&key); err != nil {
+		if err := opt(cfg); err != nil {
 			return nil, err
 		}
 	}
 
 	algo := &rsa_algo{
-		hash: key.hash,
-		bits: key.bits,
+		hash: crypto.SHA256,
+		bits: 2048,
 	}
 
 	// 优先使用密钥对象
-	if key.privateKeyObject != nil {
-		rsaKey, ok := key.privateKeyObject.(*rsa.PrivateKey)
+	if cfg.PrivateKeyObject != nil {
+		rsaKey, ok := cfg.PrivateKeyObject.(*rsa.PrivateKey)
 		if !ok {
 			return nil, errors.New("not an RSA private key")
 		}
 		algo.prk = rsaKey
-	} else if key.privateKey != "" {
-		if err := algo.WithPrivateKey(key.privateKey); err != nil {
+	} else if cfg.PrivateKey != "" {
+		if err := algo.WithPrivateKey(cfg.PrivateKey); err != nil {
 			return nil, err
 		}
 	}
 
-	if key.publicKeyObject != nil {
-		rsaKey, ok := key.publicKeyObject.(*rsa.PublicKey)
+	if cfg.PublicKeyObject != nil {
+		rsaKey, ok := cfg.PublicKeyObject.(*rsa.PublicKey)
 		if !ok {
 			return nil, errors.New("not an RSA public key")
 		}
 		algo.puk = rsaKey
-	} else if key.publicKey != "" {
-		if err := algo.WithPublicKey(key.publicKey); err != nil {
+	} else if cfg.PublicKey != "" {
+		if err := algo.WithPublicKey(cfg.PublicKey); err != nil {
 			return nil, err
 		}
 	}
@@ -68,15 +66,15 @@ func (s *rsa_algo) Name() string {
 	return "RSA"
 }
 
-func (s *rsa_algo) GenerateKey() (KeyPair, error) {
+func (s *rsa_algo) GenerateKey() (rootcrypto.KeyPair, error) {
 	key, err := rsa.GenerateKey(rand.Reader, s.bits)
 	if err != nil {
-		return KeyPair{}, err
+		return rootcrypto.KeyPair{}, err
 	}
 
 	s.prk = key
 
-	return KeyPair{
+	return rootcrypto.KeyPair{
 		PrivateKey: key,
 		PublicKey:  &key.PublicKey,
 	}, nil
@@ -143,26 +141,32 @@ func (s *rsa_algo) WithPublicKey(publicKey string) error {
 }
 
 func (s *rsa_algo) ExportPublicKey() (string, error) {
-	if s.prk == nil {
-		return "", errors.New("RSA private key not set")
+	// 与 ECDSA 行为对齐：私钥未设置时回退到仅注入的公钥
+	if s.prk == nil && s.puk == nil {
+		return "", errors.New("no key set")
 	}
 
-	pub, err := x509.MarshalPKIXPublicKey(&s.prk.PublicKey)
+	pub := s.puk
+	if pub == nil {
+		pub = &s.prk.PublicKey
+	}
+
+	out, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return "", err
 	}
 
-	return base64.StdEncoding.EncodeToString(pub), nil
+	return base64.StdEncoding.EncodeToString(out), nil
 }
 
-var label = []byte("")
-
+// OAEP 加密标签：空标签（无上下文绑定）。
+// 使用函数内字面量 []byte{} 而非包级可变变量，避免包级状态被同包代码篡改。
 func (r *rsa_algo) Encrypt(msg []byte) (bytesconv.BytesResult, error) {
 	if r.puk == nil {
 		return nil, errors.New("RSA public key not set")
 	}
 
-	cipher, err := rsa.EncryptOAEP(r.hash.New(), rand.Reader, r.puk, msg, label)
+	cipher, err := rsa.EncryptOAEP(r.hash.New(), rand.Reader, r.puk, msg, []byte{})
 	return cipher, err
 }
 
@@ -171,7 +175,13 @@ func (r *rsa_algo) Decrypt(msg []byte) (bytesconv.BytesResult, error) {
 		return nil, errors.New("RSA private key not set")
 	}
 
-	plain, err := rsa.DecryptOAEP(r.hash.New(), rand.Reader, r.prk, msg, label)
+	// 校验私钥一致性：KeyPair.Reset 清零后同指针实例可被检测到，
+	// 避免静默产出无效结果。Validate 只做一致性校验，不修改密钥。
+	if err := r.prk.Validate(); err != nil {
+		return nil, fmt.Errorf("RSA private key is invalid: %w", err)
+	}
+
+	plain, err := rsa.DecryptOAEP(r.hash.New(), rand.Reader, r.prk, msg, []byte{})
 	return plain, err
 }
 
@@ -180,14 +190,31 @@ func (r *rsa_algo) Sign(data []byte) (bytesconv.BytesResult, error) {
 		return nil, errors.New("RSA private key not set")
 	}
 
+	// 校验私钥一致性：KeyPair.Reset 清零后同指针实例可被检测到，
+	// 避免静默产出无效签名。Validate 只做一致性校验，不修改密钥。
+	if err := r.prk.Validate(); err != nil {
+		return nil, fmt.Errorf("RSA private key is invalid: %w", err)
+	}
+
 	h := r.hash.New()
 	h.Write(data)
 	hashed := h.Sum(nil)
 
-	signature, err := rsa.SignPSS(rand.Reader, r.prk, r.hash, hashed, nil)
+	// 显式指定 PSS 盐长度为 hash 长度（PSSSaltLengthEqualsHash）：
+	// 不依赖 SaltLengthAuto 的隐式推导，语义明确。
+	// 在 2048 位密钥 + SHA-256 下与 SaltLengthAuto 输出一致，行为不变。
+	signature, err := rsa.SignPSS(rand.Reader, r.prk, r.hash, hashed, &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
+		Hash:       r.hash,
+	})
 	return signature, err
 }
 
+// Verify 校验签名。
+//
+// 注意：返回 false 无法区分"签名无效"与"公钥未设置"两种情况，
+// 调用方在依赖验证结果前应先确认公钥已配置（如先调用 ExportPublicKey
+// 或构造时注入公钥）。
 func (r *rsa_algo) Verify(data, signature []byte) bool {
 	if r.puk == nil {
 		return false
@@ -197,6 +224,12 @@ func (r *rsa_algo) Verify(data, signature []byte) bool {
 	h.Write(data)
 	hashed := h.Sum(nil)
 
-	err := rsa.VerifyPSS(r.puk, r.hash, hashed, signature, nil)
+	// 验证侧显式使用 PSSSaltLengthAuto（自动探测盐长）：
+	// 兼容标准库默认（Auto）输出的最大盐长签名与本库 EqualsHash 签名。
+	// 盐策略从此处显式可见，不再依赖 opts=nil 隐式。
+	err := rsa.VerifyPSS(r.puk, r.hash, hashed, signature, &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthAuto,
+		Hash:       r.hash,
+	})
 	return err == nil
 }

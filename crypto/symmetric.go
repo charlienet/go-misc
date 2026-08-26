@@ -2,21 +2,30 @@ package crypto
 
 import (
 	"bytes"
-	"crypto/aes"
 	"crypto/cipher"
-	"crypto/des"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 
 	"github.com/charlienet/go-misc/bytesconv"
-	"github.com/emmansun/gmsm/sm4"
+	"github.com/charlienet/go-misc/crypto/common"
 )
 
-const (
-	nonceSize = 12
-)
+// ErrCiphertextNotAligned 密文长度不是块大小整数倍时返回的统一错误。
+// 错误消息刻意不含填充细节，避免成为 padding oracle 攻击的判据。
+var ErrCiphertextNotAligned = errors.New("ciphertext length must be a multiple of block size")
+
+// ErrCiphertextTooShort 密文长度不足以容纳嵌入前缀（nonce/IV/计数器）时返回的统一错误。
+var ErrCiphertextTooShort = errors.New("ciphertext too short")
+
+// ErrInvalidPadding 填充校验失败的统一哨兵错误。
+// 所有失败分支返回同一错误、错误消息不含任何细节，
+// 避免攻击者通过不同错误消息区分填充错误类型（padding oracle 判据）。
+var ErrInvalidPadding = errors.New("invalid padding")
+
+// ErrInvalidKeyLength 密钥长度与算法要求不匹配时返回的统一哨兵错误。
+// 错误消息附带长度细节（不敏感），供 errors.Is 判定。
+var ErrInvalidKeyLength = errors.New("crypto: invalid key length")
 
 // Padding 填充模式接口
 type Padding interface {
@@ -24,40 +33,48 @@ type Padding interface {
 	UnPadding(blockSize int, src []byte) ([]byte, error)
 }
 
-// pkcs7Padding PKCS7 填充模式
-type pkcs7Padding struct{}
+// PKCS7 PKCS7 填充模式（默认填充，常量时间校验 + ErrInvalidPadding 哨兵）。
+type PKCS7 struct{}
 
-func (p pkcs7Padding) Padding(blockSize int, src []byte) ([]byte, error) {
+func (p PKCS7) Padding(blockSize int, src []byte) ([]byte, error) {
 	padding := blockSize - len(src)%blockSize
 	padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 	return append(src, padtext...), nil
 }
 
-func (p pkcs7Padding) UnPadding(blockSize int, src []byte) ([]byte, error) {
+func (p PKCS7) UnPadding(blockSize int, src []byte) ([]byte, error) {
 	length := len(src)
 	if length == 0 {
-		return nil, errors.New("invalid pkcs7 padding (empty src)")
+		return nil, ErrInvalidPadding
 	}
 	unpadding := int(src[length-1])
 	if unpadding > blockSize || unpadding == 0 {
-		return nil, errors.New("invalid pkcs7 padding (unpadding > BlockSize || unpadding == 0)")
+		return nil, ErrInvalidPadding
 	}
 
 	if length < unpadding {
-		return nil, errors.New("invalid pkcs7 padding (length < unpadding)")
+		return nil, ErrInvalidPadding
 	}
 
 	pad := src[len(src)-unpadding:]
+	// 常量时间校验：累计异或全部填充字节后统一判断，
+	// 避免逐字节早退导致填充错误位置成为可观察的时序差异（padding oracle 判据）。
+	bad := 0
 	for i := 0; i < unpadding; i++ {
-		if pad[i] != byte(unpadding) {
-			return nil, errors.New("invalid pkcs7 padding (pad[i] != unpadding)")
-		}
+		bad |= int(pad[i]) ^ unpadding
+	}
+	if bad != 0 {
+		return nil, ErrInvalidPadding
 	}
 
 	return src[:(length - unpadding)], nil
 }
 
-// ZeroPadding 零填充模式
+// ZeroPadding 零填充模式。
+//
+// 警告：仅适用于不以 0x00 结尾的文本或定长数据。UnPadding 会无条件剥离尾部
+// 0x00 字节，因此以 0x00 结尾的二进制明文会在往返后静默损坏，且无 MAC 可检测。
+// 二进制数据请使用 PKCS7 等自描述填充；新代码禁用本模式。
 type ZeroPadding struct{}
 
 func (p ZeroPadding) Padding(blockSize int, src []byte) ([]byte, error) {
@@ -69,7 +86,9 @@ func (p ZeroPadding) Padding(blockSize int, src []byte) ([]byte, error) {
 		padtext := bytes.Repeat([]byte{0}, padding)
 		return append(src, padtext...), nil
 	}
-	return src, nil
+	// 全对齐时返回独立拷贝，避免与输入共享底层数组：
+	// 调用方后续修改返回值（或输入）不应污染另一方。
+	return append([]byte(nil), src...), nil
 }
 
 func (p ZeroPadding) UnPadding(blockSize int, src []byte) ([]byte, error) {
@@ -81,7 +100,10 @@ func (p ZeroPadding) UnPadding(blockSize int, src []byte) ([]byte, error) {
 	return src[:end+1], nil
 }
 
-// NoPadding 无填充模式
+// NoPadding 无填充模式。
+//
+// 注意：Padding/UnPadding 直接返回输入切片本身（与调用方共享底层数组），
+// 调用方修改返回值会同步影响输入；如需独立副本请自行拷贝。
 type NoPadding struct{}
 
 func (p NoPadding) Padding(blockSize int, src []byte) ([]byte, error) {
@@ -98,482 +120,90 @@ func (p NoPadding) UnPadding(blockSize int, src []byte) ([]byte, error) {
 // Cipher 对称加密算法接口。
 type Cipher interface {
 	Block() cipher.Block
-	BlockSize() int // 块大小（=16）
+	BlockSize() int // 块大小（AES/SM4=16，DES/3DES=8）
 	IVSize() int    // iv 长度
-	NewCTR(iv []byte) StreamCipher
-	NewGCM(nonce []byte, opts ...optFunc) (CipherMode, error)
+	// Deprecated: 无认证，仅限遗留协议兼容（详见 NewCTR 实现注释）。
+	NewCTR(iv []byte) (StreamCipher, error)
+	NewGCM(nonce []byte, opts ...Option) (CipherMode, error)
 	NewGCMWithRandomNonce() (CipherMode, error)
-	NewCBC(iv []byte, opts ...optFunc) (CipherMode, error)
-	NewECB(opts ...optFunc) (CipherMode, error)
-	NewCFB(iv []byte, opts ...optFunc) (CipherMode, error)
-	NewOFB(iv []byte, opts ...optFunc) (CipherMode, error)
+	NewCBC(iv []byte, opts ...Option) (CipherMode, error)
+	NewCBCWithRandomIV(opts ...Option) (CipherMode, error)
+	// Deprecated: 不安全，仅限遗留数据兼容（详见 NewECB 实现注释）。
+	NewECB(opts ...Option) (CipherMode, error)
+	NewCFB(iv []byte, opts ...Option) (CipherMode, error)
+	NewCFBWithRandomIV(opts ...Option) (CipherMode, error)
+	NewOFB(iv []byte, opts ...Option) (CipherMode, error)
+	NewOFBWithRandomIV(opts ...Option) (CipherMode, error)
 }
 
+// CipherMode 对称加密模式接口。
+//
+// 并发安全：Encrypt/Decrypt 方法级并发安全（各实现不共享可变状态，
+// 同一实例可安全并发调用）；StreamCipher（CTR）持有流状态，其
+// XORKeyStream/Stream 非并发安全，并发场景请各自构造独立实例。
 type CipherMode interface {
 	Encrypt(plainText []byte) (bytesconv.BytesResult, error)
 	Decrypt(cipherText []byte) (bytesconv.BytesResult, error)
 }
 
+// StreamCipher 流式加密接口。
+//
+// 非并发安全：内部持有流状态（如 CTR 计数器），并发场景请各自构造独立实例。
 type StreamCipher interface {
 	XORKeyStream(src []byte) []byte
 	Stream(reader io.Reader) io.Reader
 }
 
-var supported = map[string]*creator{
-	"SM4":     {sm4.NewCipher, sm4.BlockSize, sm4.BlockSize},
-	"AES":     {aes.NewCipher, aes.BlockSize, aes.BlockSize},
-	"AES-128": {aes.NewCipher, aes.BlockSize, aes.BlockSize},
-	"AES-192": {aes.NewCipher, 24, aes.BlockSize},
-	"AES-256": {aes.NewCipher, 32, aes.BlockSize},
-	"DES":     {des.NewCipher, des.BlockSize, des.BlockSize},
-	"3DES":    {des.NewTripleDESCipher, 24, des.BlockSize},
-}
-
-type creator struct {
-	new     func(key []byte) (cipher.Block, error)
-	keySize int // 密钥长度（AES-128:16, AES-192:24, AES-256:32, SM4:16, DES:8, 3DES:24）
-	ivSize  int
-}
-
-type optFunc func(*modeConfig)
-
-// modeConfig 仅在构造期间使用，用于将选项传播到 mode 对象。
-type modeConfig struct {
-	embediv     bool
-	embednonce  bool
-	randomNonce bool
-	aad         []byte
-	padding     Padding
-}
-
-func EmbedIV() optFunc {
-	return func(cfg *modeConfig) {
-		cfg.embediv = true
-	}
-}
-
-func EmbedNonce() optFunc {
-	return func(cfg *modeConfig) {
-		cfg.embednonce = true
-	}
-}
-
-func WithAAD(aad []byte) optFunc {
-	return func(cfg *modeConfig) {
-		cfg.aad = aad
-	}
-}
-
-// WithPadding 设置填充模式
-func WithPadding(padding Padding) optFunc {
-	return func(cfg *modeConfig) {
-		cfg.padding = padding
-	}
-}
-
+// GenerateKey 返回算法的随机密钥、IV 与 nonce。
+// 经注册表读取 CipherFactory 元数据（KeySize/IVSize；nonce 固定 12 字节），
+// 三次独立分配与随机填充：避免 key/iv/nonce 共享同一底层数组，
+// 防止调用方修改其中一个切片时意外影响另外两个。
 func GenerateKey(algorithm string) (key, iv, nonce []byte, err error) {
-	keySize, ivSize, err := BlockSize(algorithm)
+	f, err := CipherFactoryFor(algorithm)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	random := make([]byte, keySize+ivSize+nonceSize)
-	if _, err := io.ReadFull(rand.Reader, random); err != nil {
+	key = make([]byte, f.KeySize)
+	if err := common.FillRandom(key); err != nil {
+		return nil, nil, nil, err
+	}
+	iv = make([]byte, f.IVSize)
+	if err := common.FillRandom(iv); err != nil {
+		return nil, nil, nil, err
+	}
+	nonce = make([]byte, nonceSize)
+	if err := common.FillRandom(nonce); err != nil {
 		return nil, nil, nil, err
 	}
 
-	return random[:keySize], random[keySize : keySize+ivSize], random[keySize+ivSize:], nil
+	return key, iv, nonce, nil
 }
 
 // BlockSize 返回算法的密钥长度和 IV 长度。未知算法返回 error。
+// 注意：函数名中的 "BlockSize" 沿袭历史命名，实际返回 (keySize, ivSize)。
 func BlockSize(algorithm string) (blockSize, ivSize int, err error) {
-	c, ok := supported[algorithm]
-	if !ok {
-		return 0, 0, fmt.Errorf("unsupported algorithm: %s", algorithm)
+	f, err := CipherFactoryFor(algorithm)
+	if err != nil {
+		return 0, 0, err
 	}
 
-	return c.keySize, c.ivSize, nil
+	return f.KeySize, f.IVSize, nil
 }
 
+// NewCipher 创建对称加密算法实例（经注册表分发）。
+//
+// 未注册对应引擎时（多半是调用方未 blank import crypto/symmetric 子包）
+// 返回 "unsupported algorithm" 错误并提示导入路径。
+//
+// 遗留算法警告：
+//   - DES/3DES：仅兼容遗留数据，禁止新用（块大小 8 字节，无法使用 GCM）。
+//   - ECB/CTR：不安全，详见各自构造函数（NewECB / NewCTR）的 Deprecated 标注。
 func NewCipher(algorithm string, key []byte) (Cipher, error) {
-	c, ok := supported[algorithm]
-	if !ok {
-		return nil, fmt.Errorf("unsupported algorithm: %s", algorithm)
-	}
-
-	block, err := c.new(key)
+	f, err := CipherFactoryFor(algorithm)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("no engine registered for %s; add blank import: _ \"github.com/charlienet/go-misc/crypto/symmetric\" or _ \"github.com/charlienet/go-misc/crypto/engines\" for all: %w", algorithm, ErrEngineNotRegistered)
 	}
 
-	return &symmetric{block: block, creator: c}, nil
+	return f.New(key)
 }
-
-type symmetric struct {
-	block   cipher.Block
-	creator *creator
-}
-
-func (a *symmetric) Block() cipher.Block {
-	return a.block
-}
-
-// BlockSize 返回块大小（=16），不是密钥长度。
-func (a *symmetric) BlockSize() int {
-	return a.block.BlockSize()
-}
-
-func (a *symmetric) IVSize() int {
-	return a.creator.ivSize
-}
-
-// applyOpts 在构造期间应用选项，返回收集到的配置。
-func (a *symmetric) applyOpts(opts []optFunc) *modeConfig {
-	cfg := &modeConfig{}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	return cfg
-}
-
-// --- StreamCipher ---
-
-type streamCipher struct {
-	stream cipher.Stream
-}
-
-func (a *symmetric) NewCTR(iv []byte) StreamCipher {
-	return &streamCipher{stream: cipher.NewCTR(a.block, iv)}
-}
-
-func (s *streamCipher) XORKeyStream(src []byte) []byte {
-	dst := make([]byte, len(src))
-	s.stream.XORKeyStream(dst, src)
-	return dst
-}
-
-func (s *streamCipher) Stream(reader io.Reader) io.Reader {
-	return cipher.StreamReader{S: s.stream, R: reader}
-}
-
-// --- GCM ---
-
-func (a *symmetric) NewGCM(nonce []byte, opts ...optFunc) (CipherMode, error) {
-	gcm, err := cipher.NewGCM(a.block)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := a.applyOpts(opts)
-
-	return &algo_gcm{
-		block:       a.block,
-		gcm:         gcm,
-		nonce:       nonce,
-		embednonce:  cfg.embednonce,
-		randomNonce: cfg.randomNonce,
-		aad:         cfg.aad,
-	}, nil
-}
-
-func (a *symmetric) NewGCMWithRandomNonce() (CipherMode, error) {
-	gcm, err := cipher.NewGCM(a.block)
-	if err != nil {
-		return nil, err
-	}
-
-	return &algo_gcm{
-		block:       a.block,
-		gcm:         gcm,
-		embednonce:  true,
-		randomNonce: true,
-	}, nil
-}
-
-type algo_gcm struct {
-	block       cipher.Block
-	gcm         cipher.AEAD
-	nonce       []byte
-	embednonce  bool
-	randomNonce bool
-	aad         []byte
-}
-
-func (a *algo_gcm) NonceSize() int {
-	return a.gcm.NonceSize()
-}
-
-func (a *algo_gcm) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	nonce := make([]byte, a.gcm.NonceSize())
-	if a.randomNonce || len(a.nonce) == 0 {
-		if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-			return nil, err
-		}
-	} else {
-		copy(nonce, a.nonce)
-	}
-
-	if a.embednonce {
-		return a.gcm.Seal(nonce, nonce, plainText, a.aad), nil
-	}
-	return a.gcm.Seal(nil, nonce, plainText, a.aad), nil
-}
-
-func (a *algo_gcm) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
-	if a.embednonce {
-		ns := a.gcm.NonceSize()
-		if len(ciphertext) < ns {
-			return nil, errors.New("ciphertext too short for embedded nonce")
-		}
-		nonce, cipherText := ciphertext[:ns], ciphertext[ns:]
-		return a.gcm.Open(nil, nonce, cipherText, a.aad)
-	}
-	return a.gcm.Open(nil, a.nonce, ciphertext, a.aad)
-}
-
-// --- CBC ---
-
-func (a *symmetric) NewCBC(iv []byte, opts ...optFunc) (CipherMode, error) {
-	if len(iv) != a.BlockSize() {
-		return nil, errors.New("iv length is not equal to block size")
-	}
-
-	cfg := a.applyOpts(opts)
-
-	if cfg.aad != nil {
-		return nil, errors.New("WithAAD 仅支持 GCM")
-	}
-
-	padding := cfg.padding
-	if padding == nil {
-		padding = pkcs7Padding{}
-	}
-
-	return &algo_cbc{
-		block:   a.block,
-		creator: a.creator,
-		iv:      iv,
-		embediv: cfg.embediv,
-		padding: padding,
-	}, nil
-}
-
-type algo_cbc struct {
-	block   cipher.Block
-	creator *creator
-	iv      []byte
-	embediv bool
-	aad     []byte
-	padding Padding
-}
-
-func (a *algo_cbc) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	paddedText, err := a.padding.Padding(a.block.BlockSize(), plainText)
-	if err != nil {
-		return nil, err
-	}
-	
-	stream := cipher.NewCBCEncrypter(a.block, a.iv)
-
-	if a.embediv {
-		bs := a.block.BlockSize()
-		cipherText := make([]byte, len(paddedText)+bs)
-		copy(cipherText, a.iv)
-		stream.CryptBlocks(cipherText[bs:], paddedText)
-		return cipherText, nil
-	}
-
-	cipherText := make([]byte, len(paddedText))
-	stream.CryptBlocks(cipherText, paddedText)
-	return cipherText, nil
-}
-
-func (a *algo_cbc) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
-	if a.embediv {
-		bs := a.block.BlockSize()
-		if len(ciphertext) < bs {
-			return nil, errors.New("ciphertext too short for embedded IV")
-		}
-		iv, cipherText := ciphertext[:bs], ciphertext[bs:]
-		stream := cipher.NewCBCDecrypter(a.block, iv)
-		stream.CryptBlocks(cipherText, cipherText)
-		return a.padding.UnPadding(a.block.BlockSize(), cipherText)
-	}
-
-	stream := cipher.NewCBCDecrypter(a.block, a.iv)
-	dst := make([]byte, len(ciphertext))
-	stream.CryptBlocks(dst, ciphertext)
-	return a.padding.UnPadding(a.block.BlockSize(), dst)
-}
-
-// --- ECB ---
-
-func (a *symmetric) NewECB(opts ...optFunc) (CipherMode, error) {
-	cfg := a.applyOpts(opts)
-	
-	if cfg.aad != nil {
-		return nil, errors.New("WithAAD 仅支持 GCM")
-	}
-	
-	padding := cfg.padding
-	if padding == nil {
-		padding = pkcs7Padding{}
-	}
-
-	return &algo_ecb{
-		block:   a.block,
-		creator: a.creator,
-		padding: padding,
-	}, nil
-}
-
-// --- CFB ---
-
-func (a *symmetric) NewCFB(iv []byte, opts ...optFunc) (CipherMode, error) {
-	if len(iv) != a.BlockSize() {
-		return nil, errors.New("iv length is not equal to block size")
-	}
-	
-	cfg := a.applyOpts(opts)
-	if cfg.aad != nil {
-		return nil, errors.New("WithAAD 仅支持 GCM")
-	}
-	
-	return &algo_cfb{
-		block:   a.block,
-		iv:      iv,
-		embediv: cfg.embediv,
-	}, nil
-}
-
-type algo_cfb struct {
-	block   cipher.Block
-	iv      []byte
-	embediv bool
-}
-
-func (a *algo_cfb) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	stream := cipher.NewCFBEncrypter(a.block, a.iv)
-	
-	if a.embediv {
-		bs := a.block.BlockSize()
-		cipherText := make([]byte, len(plainText)+bs)
-		copy(cipherText, a.iv)
-		stream.XORKeyStream(cipherText[bs:], plainText)
-		return cipherText, nil
-	}
-	
-	cipherText := make([]byte, len(plainText))
-	stream.XORKeyStream(cipherText, plainText)
-	return cipherText, nil
-}
-
-func (a *algo_cfb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
-	if a.embediv {
-		bs := a.block.BlockSize()
-		if len(cipherText) < bs {
-			return nil, errors.New("ciphertext too short for embedded IV")
-		}
-		iv, ct := cipherText[:bs], cipherText[bs:]
-		stream := cipher.NewCFBDecrypter(a.block, iv)
-		plainText := make([]byte, len(ct))
-		stream.XORKeyStream(plainText, ct)
-		return plainText, nil
-	}
-	
-	stream := cipher.NewCFBDecrypter(a.block, a.iv)
-	plainText := make([]byte, len(cipherText))
-	stream.XORKeyStream(plainText, cipherText)
-	return plainText, nil
-}
-
-// --- OFB ---
-
-func (a *symmetric) NewOFB(iv []byte, opts ...optFunc) (CipherMode, error) {
-	if len(iv) != a.BlockSize() {
-		return nil, errors.New("iv length is not equal to block size")
-	}
-	
-	cfg := a.applyOpts(opts)
-	if cfg.aad != nil {
-		return nil, errors.New("WithAAD 仅支持 GCM")
-	}
-	
-	return &algo_ofb{
-		block:   a.block,
-		iv:      iv,
-		embediv: cfg.embediv,
-	}, nil
-}
-
-type algo_ofb struct {
-	block   cipher.Block
-	iv      []byte
-	embediv bool
-}
-
-func (a *algo_ofb) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	stream := cipher.NewOFB(a.block, a.iv)
-	
-	if a.embediv {
-		bs := a.block.BlockSize()
-		cipherText := make([]byte, len(plainText)+bs)
-		copy(cipherText, a.iv)
-		stream.XORKeyStream(cipherText[bs:], plainText)
-		return cipherText, nil
-	}
-	
-	cipherText := make([]byte, len(plainText))
-	stream.XORKeyStream(cipherText, plainText)
-	return cipherText, nil
-}
-
-func (a *algo_ofb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
-	if a.embediv {
-		bs := a.block.BlockSize()
-		if len(cipherText) < bs {
-			return nil, errors.New("ciphertext too short for embedded IV")
-		}
-		iv, ct := cipherText[:bs], cipherText[bs:]
-		stream := cipher.NewOFB(a.block, iv)
-		plainText := make([]byte, len(ct))
-		stream.XORKeyStream(plainText, ct)
-		return plainText, nil
-	}
-	
-	stream := cipher.NewOFB(a.block, a.iv)
-	plainText := make([]byte, len(cipherText))
-	stream.XORKeyStream(plainText, cipherText)
-	return plainText, nil
-}
-
-type algo_ecb struct {
-	block   cipher.Block
-	creator *creator
-	padding Padding
-}
-
-func (a *algo_ecb) Encrypt(plainText []byte) (bytesconv.BytesResult, error) {
-	paddedText, err := a.padding.Padding(a.block.BlockSize(), plainText)
-	if err != nil {
-		return nil, err
-	}
-	
-	dst := make([]byte, len(paddedText))
-	bs := a.block.BlockSize()
-	for i := 0; i < len(paddedText); i += bs {
-		a.block.Encrypt(dst[i:i+bs], paddedText[i:i+bs])
-	}
-	return dst, nil
-}
-
-func (a *algo_ecb) Decrypt(cipherText []byte) (bytesconv.BytesResult, error) {
-	dst := make([]byte, len(cipherText))
-	bs := a.block.BlockSize()
-	for i := 0; i < len(cipherText); i += bs {
-		a.block.Decrypt(dst[i:i+bs], cipherText[i:i+bs])
-	}
-	return a.padding.UnPadding(a.block.BlockSize(), dst)
-}
-
-

@@ -1,4 +1,4 @@
-package crypto
+package asym
 
 import (
 	"crypto/ecdsa"
@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/charlienet/go-misc/bytesconv"
+	rootcrypto "github.com/charlienet/go-misc/crypto"
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
 )
@@ -16,10 +17,11 @@ type sm2_algo struct {
 	puk *ecdsa.PublicKey
 }
 
-func new_sm2(opts ...keyFunc) (Asymmetric, error) {
-	key := asymmetric{}
+// newSM2 构造 SM2 非对称算法实例（注册表工厂签名）。
+func newSM2(opts ...rootcrypto.AsymOption) (rootcrypto.Asymmetric, error) {
+	cfg := &rootcrypto.AsymConfig{}
 	for _, opt := range opts {
-		if err := opt(&key); err != nil {
+		if err := opt(cfg); err != nil {
 			return nil, err
 		}
 	}
@@ -27,13 +29,13 @@ func new_sm2(opts ...keyFunc) (Asymmetric, error) {
 	s := &sm2_algo{}
 
 	// 优先使用密钥对象
-	if key.privateKeyObject != nil {
+	if cfg.PrivateKeyObject != nil {
 		// First try direct sm2.PrivateKey
-		if sm2Key, ok := key.privateKeyObject.(*sm2.PrivateKey); ok {
+		if sm2Key, ok := cfg.PrivateKeyObject.(*sm2.PrivateKey); ok {
 			s.prk = sm2Key
 		} else {
 			// Check if it's an ecdsa.PrivateKey that is actually an SM2 key
-			ecdsaKey, ok := key.privateKeyObject.(*ecdsa.PrivateKey)
+			ecdsaKey, ok := cfg.PrivateKeyObject.(*ecdsa.PrivateKey)
 			if !ok {
 				return nil, errors.New("not an SM2 private key")
 			}
@@ -47,15 +49,15 @@ func new_sm2(opts ...keyFunc) (Asymmetric, error) {
 				PrivateKey: *ecdsaKey,
 			}
 		}
-	} else if key.privateKey != "" {
-		if err := s.WithPrivateKey(key.privateKey); err != nil {
+	} else if cfg.PrivateKey != "" {
+		if err := s.WithPrivateKey(cfg.PrivateKey); err != nil {
 			return nil, err
 		}
 	}
 
-	if key.publicKeyObject != nil {
+	if cfg.PublicKeyObject != nil {
 		// SM2 uses ecdsa.PublicKey internally
-		ecdsaKey, ok := key.publicKeyObject.(*ecdsa.PublicKey)
+		ecdsaKey, ok := cfg.PublicKeyObject.(*ecdsa.PublicKey)
 		if !ok {
 			return nil, errors.New("not an SM2 public key")
 		}
@@ -64,8 +66,8 @@ func new_sm2(opts ...keyFunc) (Asymmetric, error) {
 			return nil, errors.New("not an SM2 public key")
 		}
 		s.puk = ecdsaKey
-	} else if key.publicKey != "" {
-		if err := s.WithPublicKey(key.publicKey); err != nil {
+	} else if cfg.PublicKey != "" {
+		if err := s.WithPublicKey(cfg.PublicKey); err != nil {
 			return nil, err
 		}
 	}
@@ -77,16 +79,16 @@ func (s *sm2_algo) Name() string {
 	return "SM2"
 }
 
-func (s *sm2_algo) GenerateKey() (KeyPair, error) {
+func (s *sm2_algo) GenerateKey() (rootcrypto.KeyPair, error) {
 	prv, err := sm2.GenerateKey(rand.Reader)
 	if err != nil {
-		return KeyPair{}, err
+		return rootcrypto.KeyPair{}, err
 	}
 
 	s.prk = prv
 	s.puk = &s.prk.PublicKey
 
-	return KeyPair{
+	return rootcrypto.KeyPair{
 		PrivateKey: prv,
 		PublicKey:  &prv.PublicKey,
 	}, nil
@@ -128,6 +130,11 @@ func (s *sm2_algo) WithPublicKey(key string) error {
 	if !ok {
 		return errors.New("failed to assert ECDSA public key type")
 	}
+	// 拒绝普通 NIST P256 公钥：SM2 使用专属曲线，
+	// 与对象注入路径（newSM2 中 IsSM2PublicKey 检查）语义对齐。
+	if !sm2.IsSM2PublicKey(s.puk) {
+		return errors.New("not an SM2 public key")
+	}
 
 	return nil
 }
@@ -148,6 +155,11 @@ func (s *sm2_algo) ExportPublicKey() (string, error) {
 	return base64.StdEncoding.EncodeToString(pubDER), nil
 }
 
+// Encrypt 使用 SM2 加密明文，返回 ASN.1 编码密文。
+//
+// 注意：gmsm 底层 Encrypt 对空明文（len(msg)==0）返回 (nil, nil)——
+// 即不报错、也不产出任何密文。调用方若需拒绝空明文，应自行前置校验；
+// 若按"空密文"处理，需自行区分 nil 密文与正常密文。
 func (s *sm2_algo) Encrypt(msg []byte) (bytesconv.BytesResult, error) {
 	if s.puk == nil {
 		return nil, errors.New("SM2 public key not set")
@@ -167,6 +179,11 @@ func (s *sm2_algo) Decrypt(ciphertext []byte) (bytesconv.BytesResult, error) {
 func (s *sm2_algo) Sign(msg []byte) (bytesconv.BytesResult, error) {
 	if s.prk == nil {
 		return nil, errors.New("SM2 private key not set")
+	}
+	// 校验私钥可用：KeyPair.Reset 清零后同指针实例可被检测到，
+	// 避免对零值 D 静默产出无效签名。
+	if s.prk.D == nil || s.prk.D.Sign() == 0 {
+		return nil, errors.New("SM2 private key is invalid or has been reset")
 	}
 
 	return s.prk.SignWithSM2(rand.Reader, nil, msg)

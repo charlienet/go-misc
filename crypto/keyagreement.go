@@ -1,163 +1,46 @@
 package crypto
 
 import (
-    "crypto"
-    "crypto/ecdh"
-    "crypto/ecdsa"
-    "crypto/rand"
-    "errors"
-    "fmt"
-    
-    "github.com/emmansun/gmsm/sm2"
+	"crypto"
+	"fmt"
 )
 
-// KeyAgreement 密钥协商接口
+// KeyAgreement 密钥协商接口。
+//
+// 并发安全说明：本接口实现（ECDH/X25519/SM2）均非并发安全，
+// 每个实例应在单协程内使用；GenerateKey 与 WithPrivateKey 写入同一
+// 私钥字段，二者互斥，重复调用以后一次为准。
+//
+// 注意：SM2 实现的 DeriveSharedSecret 已被禁用（始终返回错误），
+// 因其原实现为裸标量乘法拼接 x||y，并非标准 SM2 KAP——
+// 无前向保密、无 SM3-KDF、无密钥确认、输出长度不稳定（63/64 字节浮动），极易误用。
+// 需要 SM2 曲线上的协商时，请改用 ECDH 或 X25519。
 type KeyAgreement interface {
-    GenerateKey() (*KeyPair, error)
-    DeriveSharedSecret(peerPublicKey crypto.PublicKey) ([]byte, error)
-    Name() string
+	GenerateKey() (*KeyPair, error)
+	// WithPrivateKey 注入既有私钥（密钥轮换/存量密钥导入场景），
+	// 语义与 asymmetric 包的 WithPrivateKeyObject 一致。
+	// 注入后 DeriveSharedSecret 使用该私钥；与 GenerateKey 互斥（写同一字段）。
+	WithPrivateKey(key crypto.PrivateKey) error
+	// DeriveSharedSecret 返回原始共享密钥，未经任何 KDF 派生。
+	// 用作对称密钥材料前，必须经 HKDF/SM3-KDF 等密钥派生函数处理；
+	// 对端公钥必须来自认证通道，防止中间人替换。
+	DeriveSharedSecret(peerPublicKey crypto.PublicKey) ([]byte, error)
+	Name() string
 }
 
-// 密钥协商算法注册表
-var keyAgreementAlgorithms = map[string]func() (KeyAgreement, error){
-    "ECDH":   newECDH,
-    "X25519": newX25519,
-    "SM2":    newSM2KeyAgreement,
-}
-
-// NewKeyAgreement 创建密钥协商器
-func NewKeyAgreement(algorithm string) (KeyAgreement, error) {
-    normalizedAlg, err := NormalizeAlgorithm(algorithm)
-    if err != nil {
-        return nil, fmt.Errorf("invalid algorithm: %w", err)
-    }
-    creator, ok := keyAgreementAlgorithms[normalizedAlg]
-    if !ok {
-        return nil, fmt.Errorf("unsupported key agreement algorithm: %s", algorithm)
-    }
-    return creator()
-}
-
-// --- ECDH 实现 ---
-
-type ecdhKA struct {
-    privateKey *ecdh.PrivateKey
-    curve      ecdh.Curve
-}
-
-func newECDH() (KeyAgreement, error) {
-    return &ecdhKA{curve: ecdh.P256()}, nil
-}
-
-func (k *ecdhKA) Name() string {
-    return "ECDH"
-}
-
-func (k *ecdhKA) GenerateKey() (*KeyPair, error) {
-    priv, err := k.curve.GenerateKey(rand.Reader)
-    if err != nil {
-        return nil, err
-    }
-    k.privateKey = priv
-    return &KeyPair{
-        PrivateKey: priv,
-        PublicKey:  priv.PublicKey(),
-    }, nil
-}
-
-func (k *ecdhKA) DeriveSharedSecret(peerPublicKey crypto.PublicKey) ([]byte, error) {
-    if k.privateKey == nil {
-        return nil, errors.New("private key not set")
-    }
-    
-    ecdhPub, ok := peerPublicKey.(*ecdh.PublicKey)
-    if !ok {
-        return nil, errors.New("invalid public key type for ECDH")
-    }
-    
-    return k.privateKey.ECDH(ecdhPub)
-}
-
-// --- X25519 实现 ---
-
-type x25519KA struct {
-    privateKey *ecdh.PrivateKey
-}
-
-func newX25519() (KeyAgreement, error) {
-    return &x25519KA{}, nil
-}
-
-func (k *x25519KA) Name() string {
-    return "X25519"
-}
-
-func (k *x25519KA) GenerateKey() (*KeyPair, error) {
-    priv, err := ecdh.X25519().GenerateKey(rand.Reader)
-    if err != nil {
-        return nil, err
-    }
-    k.privateKey = priv
-    return &KeyPair{
-        PrivateKey: priv,
-        PublicKey:  priv.PublicKey(),
-    }, nil
-}
-
-func (k *x25519KA) DeriveSharedSecret(peerPublicKey crypto.PublicKey) ([]byte, error) {
-    if k.privateKey == nil {
-        return nil, errors.New("private key not set")
-    }
-    
-    ecdhPub, ok := peerPublicKey.(*ecdh.PublicKey)
-    if !ok {
-        return nil, errors.New("invalid public key type for X25519")
-    }
-    
-    return k.privateKey.ECDH(ecdhPub)
-}
-
-// --- SM2 密钥协商实现 ---
-
-type sm2KA struct {
-    privateKey *sm2.PrivateKey
-}
-
-func newSM2KeyAgreement() (KeyAgreement, error) {
-    return &sm2KA{}, nil
-}
-
-func (k *sm2KA) Name() string {
-    return "SM2"
-}
-
-func (k *sm2KA) GenerateKey() (*KeyPair, error) {
-    priv, err := sm2.GenerateKey(rand.Reader)
-    if err != nil {
-        return nil, err
-    }
-    k.privateKey = priv
-    return &KeyPair{
-        PrivateKey: priv,
-        PublicKey:  &priv.PublicKey,
-    }, nil
-}
-
-func (k *sm2KA) DeriveSharedSecret(peerPublicKey crypto.PublicKey) ([]byte, error) {
-    if k.privateKey == nil {
-        return nil, errors.New("private key not set")
-    }
-    
-    // 检查是否为ecdsa公钥并验证是否是SM2密钥
-    ecdsaPub, isEcdsa := peerPublicKey.(*ecdsa.PublicKey)
-    if !isEcdsa || !sm2.IsSM2PublicKey(ecdsaPub) {
-        return nil, errors.New("invalid public key type for SM2")
-    }
-    
-    // 使用SM2曲线进行密钥协商
-    // 在实际SM2密钥协商协议中，还需要额外的参数和步骤
-    // 为简化，这里使用椭圆曲线上的标量乘法
-    x, y := k.privateKey.Curve.ScalarMult(ecdsaPub.X, ecdsaPub.Y, k.privateKey.D.Bytes())
-    sharedSecret := append(x.Bytes(), y.Bytes()...)
-    return sharedSecret, nil
+// NewKeyAgreement 创建密钥协商器。
+// 预定义算法仅支持 ECDH/X25519/SM2（RSA/ECDSA/ED25519 属非对称加解密，直接拒绝）；
+// 非预定义值（自定义算法/拼写错误）查询注册表，未注册时报
+// "no engine registered; import crypto/agreement" 错误。
+func NewKeyAgreement(algorithm AsymmetricAlgorithm) (KeyAgreement, error) {
+	creator, err := KeyAgreementFactoryFor(string(algorithm))
+	if err == nil {
+		return creator()
+	}
+	switch algorithm {
+	case RSA, ECDSA, ED25519:
+		return nil, fmt.Errorf("unsupported key agreement algorithm: %s", algorithm)
+	default:
+		return nil, fmt.Errorf("no engine registered for %s; add blank import: _ \"github.com/charlienet/go-misc/crypto/agreement\" or _ \"github.com/charlienet/go-misc/crypto/engines\" for all: %w", algorithm, ErrEngineNotRegistered)
+	}
 }

@@ -1,10 +1,14 @@
-package crypto
+package envelope
 
 import (
 	"crypto/cipher"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"math"
+
+	rootcrypto "github.com/charlienet/go-misc/crypto"
 )
 
 // 分块 GCM 认证加密（格式 "fsb1"）。
@@ -22,6 +26,10 @@ const (
 // 标准库 GCM 的 nonce 大小。非 12 字节 nonce 有性能退化，显式校验。
 const blockNonceSize = 12
 
+// maxProbeStall 解密探测循环中连续 (0, nil) 读的最大次数上限，
+// 防止底层 reader 持续空转导致忙等死循环。
+const maxProbeStall = 128
+
 var (
 	// ErrCipherTooLong 解密时密文超出预期块数。
 	ErrCipherTooLong = errors.New("block aead: ciphertext extends beyond expected block count")
@@ -33,6 +41,9 @@ var (
 	ErrNonceOverflow = errors.New("block aead: nonce overflow")
 	// ErrInvalidBaseNonce baseNonce 长度非法（必须 12 字节）。
 	ErrInvalidBaseNonce = errors.New("block aead: invalid base nonce, must be 12 bytes")
+	// ErrNoProgress 解密探测循环中底层 reader 持续 (0, nil) 空转、
+	// 达到 maxProbeStall 上限仍无进展，判定为忙等异常。
+	ErrNoProgress = errors.New("block aead: reader made no progress")
 )
 
 // deriveNonce 将 baseNonce 视为大端 96 位整数加上 blockIndex，返回 12 字节。
@@ -76,6 +87,8 @@ func buildAAD(totalSize int64, blockIndex uint64) []byte {
 // 输出连续的 "密文块 || 认证标签" 流。内部统计实际读到的明文字节数，
 // 结束时必须等于 totalSize，否则返回 ErrSizeMismatch。
 // 空文件（totalSize=0）输出空流，不报错。
+//
+// 非并发安全：内部维护分块与缓冲状态，每个使用方应持有独立实例。
 type EncryptingReader struct {
 	src       io.Reader
 	aead      cipher.AEAD
@@ -107,7 +120,15 @@ func (r *EncryptingReader) Length() int64 {
 }
 
 // NewEncryptingReader 构造流式分块加密器。
-func NewEncryptingReader(src io.Reader, c Cipher, baseNonce []byte, totalSize int64) (*EncryptingReader, error) {
+func NewEncryptingReader(src io.Reader, c rootcrypto.Cipher, baseNonce []byte, totalSize int64) (*EncryptingReader, error) {
+	if totalSize < 0 {
+		return nil, fmt.Errorf("block aead: invalid totalSize %d, must be >= 0", totalSize)
+	}
+	// 上界校验：totalSize 过大会使 Length()/块数计算中的
+	// (totalSize + ChunkSize - 1) 回绕为负，块数错乱；此处提前拒绝。
+	if totalSize > math.MaxInt64-(ChunkSize-1) {
+		return nil, fmt.Errorf("block aead: totalSize too large: %d", totalSize)
+	}
 	if len(baseNonce) != blockNonceSize {
 		return nil, ErrInvalidBaseNonce
 	}
@@ -193,6 +214,8 @@ func (r *EncryptingReader) nextBlock() (bool, error) {
 // 才输出明文。读完 ceil(totalSize/ChunkSize) 块后若 src 仍有剩余字节
 // 返回 ErrCipherTooLong；中途 EOF 且块数不足返回 ErrCipherTruncated；
 // 任一标签验证失败返回 GCM 认证错误。
+//
+// 非并发安全：内部维护分块与缓冲状态，每个使用方应持有独立实例。
 type DecryptingReader struct {
 	src       io.Reader
 	aead      cipher.AEAD
@@ -206,7 +229,14 @@ type DecryptingReader struct {
 }
 
 // NewDecryptingReader 构造流式分块解密器。
-func NewDecryptingReader(src io.Reader, c Cipher, baseNonce []byte, totalSize int64) (*DecryptingReader, error) {
+func NewDecryptingReader(src io.Reader, c rootcrypto.Cipher, baseNonce []byte, totalSize int64) (*DecryptingReader, error) {
+	if totalSize < 0 {
+		return nil, fmt.Errorf("block aead: invalid totalSize %d, must be >= 0", totalSize)
+	}
+	// 上界校验：与 NewEncryptingReader 同源，防止块数计算回绕为负。
+	if totalSize > math.MaxInt64-(ChunkSize-1) {
+		return nil, fmt.Errorf("block aead: totalSize too large: %d", totalSize)
+	}
 	if len(baseNonce) != blockNonceSize {
 		return nil, ErrInvalidBaseNonce
 	}
@@ -265,6 +295,7 @@ func (r *DecryptingReader) nextBlock() (bool, error) {
 	// 所有预期块处理完毕：校验 src 是否还有多余密文。
 	if r.blockIndex >= r.numBlocks {
 		var probe [1]byte
+		stalled := 0 // 连续 (0, nil) 空转计数（读到数据即直接返回，计数仅针对连续空转）
 		for {
 			n, err := r.src.Read(probe[:])
 			if n > 0 {
@@ -276,7 +307,12 @@ func (r *DecryptingReader) nextBlock() (bool, error) {
 			if err != nil {
 				return false, err
 			}
-			// n == 0 && err == nil，继续探测
+			// n == 0 && err == nil：底层 reader 未推进。连续空转达到上限
+			// 视为异常，返回 ErrNoProgress 哨兵避免无限忙等。
+			stalled++
+			if stalled >= maxProbeStall {
+				return false, ErrNoProgress
+			}
 		}
 	}
 
