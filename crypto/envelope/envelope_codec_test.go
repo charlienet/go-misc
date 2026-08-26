@@ -19,7 +19,7 @@ import (
 type nameOnlyCodec struct{ name string }
 
 func (c nameOnlyCodec) Name() string { return c.name }
-func (c nameOnlyCodec) Encrypt(string, []byte, []byte, ...rootcrypto.Option) ([]byte, error) {
+func (c nameOnlyCodec) Encrypt(rootcrypto.Algorithm, []byte, []byte, ...rootcrypto.Option) ([]byte, error) {
 	return nil, nil
 }
 func (c nameOnlyCodec) Decrypt([]byte, []byte, ...rootcrypto.Option) ([]byte, error) {
@@ -33,8 +33,8 @@ type legacyECBCodec struct{}
 
 func (legacyECBCodec) Name() string { return "test-legacy-ecb" }
 
-func (legacyECBCodec) Encrypt(algorithm string, key []byte, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error) {
-	c, err := rootcrypto.NewCipher(algorithm, key)
+func (legacyECBCodec) Encrypt(algorithm rootcrypto.Algorithm, key []byte, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error) {
+	c, err := rootcrypto.NewCipher(algorithm.String(), key)
 	if err != nil {
 		return nil, err
 	}
@@ -212,9 +212,9 @@ func TestGCX1Codec_EquivalentToEncrypt(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	plaintext := []byte("codec equivalence")
 
-	envCodec, err := EncryptWith(EnvelopeCodecGCX1, "AES-128", key, plaintext)
+	envCodec, err := EncryptWith(EnvelopeCodecGCX1, rootcrypto.AES128, key, plaintext)
 	require.NoError(t, err)
-	envDirect, err := Encrypt("AES-128", key, plaintext)
+	envDirect, err := Encrypt(rootcrypto.AES128, key, plaintext)
 	require.NoError(t, err)
 
 	// 结构一致：均为合法 gcx1 v2 信封
@@ -234,9 +234,9 @@ func TestGCX1Codec_EquivalentToEncrypt(t *testing.T) {
 
 	// 带 AAD：EncryptWith(gcx1, WithAAD) 与 EncryptWithAAD 互通
 	aad := []byte("context-aad")
-	envCodecAAD, err := EncryptWith(EnvelopeCodecGCX1, "AES-128", key, plaintext, rootcrypto.WithAAD(aad))
+	envCodecAAD, err := EncryptWith(EnvelopeCodecGCX1, rootcrypto.AES128, key, plaintext, rootcrypto.WithAAD(aad))
 	require.NoError(t, err)
-	envDirectAAD, err := EncryptWithAAD("AES-128", key, plaintext, aad)
+	envDirectAAD, err := EncryptWithAAD(rootcrypto.AES128, key, plaintext, aad)
 	require.NoError(t, err)
 
 	d, err = DecryptWithAAD(key, envCodecAAD, aad)
@@ -255,7 +255,7 @@ func TestGCX1Codec_RoundTrip(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	plaintext := []byte("gcx1 codec round trip")
 
-	envelope, err := EncryptWith(EnvelopeCodecGCX1, "SM4", key, plaintext)
+	envelope, err := EncryptWith(EnvelopeCodecGCX1, rootcrypto.SM4, key, plaintext)
 	require.NoError(t, err)
 	decrypted, err := DecryptWith(EnvelopeCodecGCX1, key, envelope)
 	require.NoError(t, err)
@@ -272,7 +272,7 @@ func TestExampleLegacyECBCodec_RoundTrip(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	plaintext := []byte("legacy ecb payload")
 
-	envelope, err := EncryptWith(codec.Name(), "AES-128", key, plaintext)
+	envelope, err := EncryptWith(codec.Name(), rootcrypto.AES128, key, plaintext)
 	require.NoError(t, err)
 	assert.NotEmpty(t, envelope)
 
@@ -285,7 +285,7 @@ func TestExampleLegacyECBCodec_RoundTrip(t *testing.T) {
 	assert.Error(t, err)
 
 	// 错误密文拒收：Base64 合法但密文损坏（填充/对齐校验失败）
-	corrupted, err := EncryptWith(codec.Name(), "AES-128", key, plaintext)
+	corrupted, err := EncryptWith(codec.Name(), rootcrypto.AES128, key, plaintext)
 	require.NoError(t, err)
 	b, err := base64.StdEncoding.DecodeString(string(corrupted))
 	require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestExampleCodec_ConcurrentRoundTrip(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			envelope, err := codec.Encrypt("AES-128", key, plaintext)
+			envelope, err := codec.Encrypt(rootcrypto.AES128, key, plaintext)
 			if err != nil {
 				t.Errorf("Encrypt failed: %v", err)
 				return
@@ -326,7 +326,7 @@ func TestExampleCodec_ConcurrentRoundTrip(t *testing.T) {
 // ==================== 入口错误路径 ====================
 
 func TestEncryptWith_UnknownCodec(t *testing.T) {
-	_, err := EncryptWith("no-such-codec", "AES-128", []byte("0123456789abcdef"), []byte("test"))
+	_, err := EncryptWith("no-such-codec", rootcrypto.AES128, []byte("0123456789abcdef"), []byte("test"))
 	assert.ErrorIs(t, err, ErrUnknownEnvelopeCodec)
 }
 
@@ -335,12 +335,7 @@ func TestDecryptWith_UnknownCodec(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnknownEnvelopeCodec)
 }
 
-func TestEncryptWith_InvalidAlgorithm(t *testing.T) {
-	// 归一化失败透传（与 Encrypt 行为一致）
-	_, err := EncryptWith(EnvelopeCodecGCX1, "BLOWFISH", []byte("0123456789abcdef"), []byte("test"))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported algorithm")
-}
+
 
 func TestDecryptWith_GCX1BadMagic(t *testing.T) {
 	key := []byte("0123456789abcdef")

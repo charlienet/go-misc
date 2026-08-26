@@ -20,7 +20,7 @@ func TestGCX1_RoundTrip_SM4(t *testing.T) {
 	key := []byte("0123456789abcdef") // SM4: 16 bytes
 	plaintext := []byte("hello, sm4!")
 
-	envelope, err := Encrypt("SM4", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.SM4, key, plaintext)
 	assert.NoError(t, err)
 	assert.True(t, bytes.HasPrefix(envelope, []byte(gcx1Magic)))
 
@@ -33,7 +33,7 @@ func TestGCX1_RoundTrip_AES128(t *testing.T) {
 	key := []byte("0123456789abcdef") // AES-128: 16 bytes
 	plaintext := []byte("hello, aes128!")
 
-	envelope, err := Encrypt("AES-128", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES128, key, plaintext)
 	assert.NoError(t, err)
 
 	decrypted, err := Decrypt(key, envelope)
@@ -45,7 +45,7 @@ func TestGCX1_RoundTrip_AES192(t *testing.T) {
 	key := []byte("0123456789abcdef01234567") // AES-192: 24 bytes
 	plaintext := []byte("hello, aes192!")
 
-	envelope, err := Encrypt("AES-192", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES192, key, plaintext)
 	assert.NoError(t, err)
 
 	decrypted, err := Decrypt(key, envelope)
@@ -57,7 +57,7 @@ func TestGCX1_RoundTrip_AES256(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef") // AES-256: 32 bytes
 	plaintext := []byte("hello, aes256!")
 
-	envelope, err := Encrypt("AES-256", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES256, key, plaintext)
 	assert.NoError(t, err)
 
 	decrypted, err := Decrypt(key, envelope)
@@ -71,7 +71,7 @@ func TestGCX1_Structure(t *testing.T) {
 	key := []byte("0123456789abcdef")
 	plaintext := []byte("test")
 
-	envelope, err := Encrypt("AES-128", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES128, key, plaintext)
 	assert.NoError(t, err)
 
 	// 验证总长度：header(7) + nonce(12) + ciphertext(4) + tag(16) = 39
@@ -158,7 +158,7 @@ func TestGCX1_V1Compatibility_WithAAD(t *testing.T) {
 
 func TestGCX1_V2_HeaderTamper(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, err := Encrypt("AES-128", key, []byte("test"))
+	envelope, err := Encrypt(rootcrypto.AES128, key, []byte("test"))
 	require.NoError(t, err)
 	assert.Equal(t, byte(gcx1VersionV2), envelope[4])
 
@@ -196,7 +196,7 @@ func TestGCX1_V2_HeaderTamper(t *testing.T) {
 func TestGCX1_EmptyPlaintext(t *testing.T) {
 	key := []byte("0123456789abcdef")
 
-	envelope, err := Encrypt("AES-128", key, []byte{})
+	envelope, err := Encrypt(rootcrypto.AES128, key, []byte{})
 	assert.NoError(t, err)
 
 	decrypted, err := Decrypt(key, envelope)
@@ -208,7 +208,7 @@ func TestGCX1_EmptyPlaintext(t *testing.T) {
 
 func TestGCX1_Tamper_NonceLen(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 
 	tampered := make([]byte, len(envelope))
 	copy(tampered, envelope)
@@ -218,19 +218,13 @@ func TestGCX1_Tamper_NonceLen(t *testing.T) {
 	assert.ErrorIs(t, err, errGcx1NonceLenMismatch)
 }
 
-// ==================== EncryptWithAAD 未知算法 ====================
 
-func TestGCX1_EncryptWithAAD_UnknownAlgorithm(t *testing.T) {
-	key := []byte("0123456789abcdef")
-	_, err := EncryptWithAAD("UNKNOWN", key, []byte("test"), []byte("aad"))
-	assert.Error(t, err)
-}
 
 // ==================== EncryptWithAAD DES 拒绝 ====================
 
 func TestGCX1_EncryptWithAAD_DES_Rejected(t *testing.T) {
 	key := []byte("01234567")
-	_, err := EncryptWithAAD("DES", key, []byte("test"), []byte("aad"))
+	_, err := EncryptWithAAD(rootcrypto.DES, key, []byte("test"), []byte("aad"))
 	assert.ErrorIs(t, err, errGcx1DESNotSupported)
 }
 
@@ -238,7 +232,7 @@ func TestGCX1_EncryptWithAAD_DES_Rejected(t *testing.T) {
 
 func TestGCX1_Tamper_Magic(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 
 	// 篡改魔数
 	tampered := make([]byte, len(envelope))
@@ -251,7 +245,7 @@ func TestGCX1_Tamper_Magic(t *testing.T) {
 
 func TestGCX1_Tamper_Version(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 	// 新加密输出为 v2
 	assert.Equal(t, byte(gcx1VersionV2), envelope[4])
 
@@ -270,7 +264,7 @@ func TestGCX1_Tamper_Version(t *testing.T) {
 
 func TestGCX1_Tamper_AlgID(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 
 	tampered := make([]byte, len(envelope))
 	copy(tampered, envelope)
@@ -282,7 +276,7 @@ func TestGCX1_Tamper_AlgID(t *testing.T) {
 
 func TestGCX1_Tamper_Nonce(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 
 	tampered := make([]byte, len(envelope))
 	copy(tampered, envelope)
@@ -294,7 +288,7 @@ func TestGCX1_Tamper_Nonce(t *testing.T) {
 
 func TestGCX1_Tamper_Ciphertext(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 
 	tampered := make([]byte, len(envelope))
 	copy(tampered, envelope)
@@ -306,7 +300,7 @@ func TestGCX1_Tamper_Ciphertext(t *testing.T) {
 
 func TestGCX1_Tamper_Tag(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	envelope, _ := Encrypt("AES-128", key, []byte("test"))
+	envelope, _ := Encrypt(rootcrypto.AES128, key, []byte("test"))
 
 	tampered := make([]byte, len(envelope))
 	copy(tampered, envelope)
@@ -324,7 +318,7 @@ func TestGCX1_AAD_Inconsistent(t *testing.T) {
 	aad1 := []byte("aad-v1")
 	aad2 := []byte("aad-v2")
 
-	envelope, err := EncryptWithAAD("AES-128", key, plaintext, aad1)
+	envelope, err := EncryptWithAAD(rootcrypto.AES128, key, plaintext, aad1)
 	assert.NoError(t, err)
 
 	// 使用不同 AAD 解密，应失败
@@ -337,7 +331,7 @@ func TestGCX1_AAD_Consistent(t *testing.T) {
 	plaintext := []byte("test aad")
 	aad := []byte("consistent-aad")
 
-	envelope, err := EncryptWithAAD("AES-128", key, plaintext, aad)
+	envelope, err := EncryptWithAAD(rootcrypto.AES128, key, plaintext, aad)
 	assert.NoError(t, err)
 
 	decrypted, err := DecryptWithAAD(key, envelope, aad)
@@ -350,7 +344,7 @@ func TestGCX1_AAD_EncryptWithout_DecryptWith(t *testing.T) {
 	plaintext := []byte("test")
 
 	// 不使用 AAD 加密
-	envelope, err := Encrypt("AES-128", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES128, key, plaintext)
 	assert.NoError(t, err)
 
 	// 尝试用 AAD 解密，应失败
@@ -360,27 +354,21 @@ func TestGCX1_AAD_EncryptWithout_DecryptWith(t *testing.T) {
 
 // ==================== 未知算法拒绝 ====================
 
-func TestGCX1_UnknownAlgorithm(t *testing.T) {
-	key := []byte("0123456789abcdef")
 
-	_, err := Encrypt("UNKNOWN", key, []byte("test"))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported algorithm")
-}
 
 // ==================== DES/3DES 拒绝 ====================
 
 func TestGCX1_DES_Rejected(t *testing.T) {
 	key := []byte("01234567") // DES: 8 bytes
 
-	_, err := Encrypt("DES", key, []byte("test"))
+	_, err := Encrypt(rootcrypto.DES, key, []byte("test"))
 	assert.ErrorIs(t, err, errGcx1DESNotSupported)
 }
 
 func TestGCX1_3DES_Rejected(t *testing.T) {
 	key := []byte("0123456789abcdef01234567") // 3DES: 24 bytes
 
-	_, err := Encrypt("3DES", key, []byte("test"))
+	_, err := Encrypt(rootcrypto.TripleDES, key, []byte("test"))
 	assert.ErrorIs(t, err, errGcx1DESNotSupported)
 }
 
@@ -418,31 +406,7 @@ func TestGCX1_TooShort(t *testing.T) {
 	assert.ErrorIs(t, err, errGcx1TooShort)
 }
 
-// ==================== 泛名 AES 语义（文档化拒绝） ====================
-// 泛名 "AES" 仅低层 NewCipher 支持（16/24/32 字节密钥按长度确定算法）；
-// 高层 Encrypt 会将泛名归一化为 "AES-128"，密钥长度非 16 字节时返回错误，
-// 调用方应改用精确算法名（AES-192/AES-256）。
-func TestGCX1_Encrypt_GenericAES_Behavior(t *testing.T) {
-	plaintext := []byte("generic aes behavior")
 
-	// 16 字节密钥：归一化 "AES-128" 恰好匹配，加密并往返成功
-	key16 := []byte("0123456789abcdef")
-	envelope, err := Encrypt("AES", key16, plaintext)
-	assert.NoError(t, err)
-	decrypted, err := Decrypt(key16, envelope)
-	assert.NoError(t, err)
-	assert.Equal(t, plaintext, decrypted)
-
-	// 24 字节密钥：归一化 "AES-128" 与密钥长度不匹配，必须报错
-	_, err = Encrypt("AES", []byte("0123456789abcdef01234567"), plaintext)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid key length")
-
-	// 32 字节密钥：同上，必须报错
-	_, err = Encrypt("AES", []byte("0123456789abcdef0123456789abcdef"), plaintext)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid key length")
-}
 
 // ==================== 并发测试 ====================
 
@@ -459,14 +423,14 @@ func TestGCX1_Concurrent(t *testing.T) {
 		// 并发加密
 		go func() {
 			defer wg.Done()
-			_, err := Encrypt("AES-128", key, plaintext)
+			_, err := Encrypt(rootcrypto.AES128, key, plaintext)
 			errs <- err
 		}()
 
 		// 并发加密（带 AAD）
 		go func() {
 			defer wg.Done()
-			_, err := EncryptWithAAD("SM4", key, plaintext, []byte("aad"))
+			_, err := EncryptWithAAD(rootcrypto.SM4, key, plaintext, []byte("aad"))
 			errs <- err
 		}()
 	}
@@ -489,7 +453,7 @@ func TestGCX1_Concurrent_RoundTrip(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			envelope, err := Encrypt("AES-128", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES128, key, plaintext)
 			if err != nil {
 				t.Errorf("Encrypt failed: %v", err)
 				return
@@ -515,9 +479,9 @@ func TestGCX1_NonceRandomness(t *testing.T) {
 	plaintext := []byte("same plaintext")
 
 	// 同一明文加密两次，信封应不同（因为 nonce 随机）
-	env1, err := Encrypt("AES-128", key, plaintext)
+	env1, err := Encrypt(rootcrypto.AES128, key, plaintext)
 	assert.NoError(t, err)
-	env2, err := Encrypt("AES-128", key, plaintext)
+	env2, err := Encrypt(rootcrypto.AES128, key, plaintext)
 	assert.NoError(t, err)
 
 	// 信封内容应不同（nonce 不同导致密文不同）
@@ -539,7 +503,7 @@ func TestGCX1_WrongKey(t *testing.T) {
 	key2 := []byte("fedcba9876543210")
 	plaintext := []byte("secret")
 
-	envelope, err := Encrypt("AES-128", key1, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES128, key1, plaintext)
 	assert.NoError(t, err)
 
 	_, err = Decrypt(key2, envelope)
@@ -554,7 +518,7 @@ func TestGCX1_LargePlaintext(t *testing.T) {
 	_, err := io.ReadFull(rand.Reader, plaintext)
 	assert.NoError(t, err)
 
-	envelope, err := Encrypt("AES-256", key, plaintext)
+	envelope, err := Encrypt(rootcrypto.AES256, key, plaintext)
 	assert.NoError(t, err)
 
 	decrypted, err := Decrypt(key, envelope)

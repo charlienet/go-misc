@@ -426,7 +426,7 @@ func BenchmarkEnvelopeEncrypt(b *testing.B) {
 	b.SetBytes(size)
 
 	for b.Loop() {
-		if _, err := Encrypt("AES-128", key, plain); err != nil {
+		if _, err := Encrypt(rootcrypto.AES128, key, plain); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -444,7 +444,7 @@ func BenchmarkEnvelopeDecrypt(b *testing.B) {
 	if _, err := io.ReadFull(rand.Reader, plain); err != nil {
 		b.Fatal(err)
 	}
-	envelope, err := Encrypt("AES-128", key, plain)
+	envelope, err := Encrypt(rootcrypto.AES128, key, plain)
 	if err != nil {
 		b.Fatal(err)
 	}

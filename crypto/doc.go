@@ -373,7 +373,7 @@
 //		aad := []byte("additional-authenticated-data") // Optional context binding
 //
 //		// Encrypt with AAD (Authenticated Additional Data)
-//		ciphertext, err := envelope.EncryptWithAAD("AES-128", key, plaintext, aad)
+//		ciphertext, err := envelope.EncryptWithAAD(crypto.AES128, key, plaintext, aad)
 //		if err != nil {
 //			log.Fatal(err)
 //		}

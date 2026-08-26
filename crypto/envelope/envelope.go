@@ -32,23 +32,23 @@ const (
 )
 
 // algorithmIDMap 将算法常量名映射到 gcx1 algID 字节。
-var algorithmIDMap = map[string]byte{
-	rootcrypto.AlgorithmSM4:    algIDSM4,
-	rootcrypto.AlgorithmAES128: algIDAES128,
-	rootcrypto.AlgorithmAES192: algIDAES192,
-	rootcrypto.AlgorithmAES256: algIDAES256,
-	rootcrypto.AlgorithmDES:    algIDDES,
-	rootcrypto.Algorithm3DES:   algID3DES,
+var algorithmIDMap = map[rootcrypto.Algorithm]byte{
+	rootcrypto.SM4:       algIDSM4,
+	rootcrypto.AES128:    algIDAES128,
+	rootcrypto.AES192:    algIDAES192,
+	rootcrypto.AES256:    algIDAES256,
+	rootcrypto.DES:       algIDDES,
+	rootcrypto.TripleDES: algID3DES,
 }
 
 // idAlgorithmMap 将 gcx1 algID 字节映射回算法常量名。
-var idAlgorithmMap = map[byte]string{
-	algIDSM4:    rootcrypto.AlgorithmSM4,
-	algIDAES128: rootcrypto.AlgorithmAES128,
-	algIDAES192: rootcrypto.AlgorithmAES192,
-	algIDAES256: rootcrypto.AlgorithmAES256,
-	algIDDES:    rootcrypto.AlgorithmDES,
-	algID3DES:   rootcrypto.Algorithm3DES,
+var idAlgorithmMap = map[byte]rootcrypto.Algorithm{
+	algIDSM4:    rootcrypto.SM4,
+	algIDAES128: rootcrypto.AES128,
+	algIDAES192: rootcrypto.AES192,
+	algIDAES256: rootcrypto.AES256,
+	algIDDES:    rootcrypto.DES,
+	algID3DES:   rootcrypto.TripleDES,
 }
 
 var (
@@ -83,20 +83,16 @@ func buildGcx1MetaAAD(algID byte) []byte {
 //
 // 输出 v2 信封：header 元数据（magic/version/algID/nonceLen）纳入 GCM AAD，
 // 防篡改；v1 信封仍可被 Decrypt 兼容读取。
-func Encrypt(algorithm string, key []byte, plaintext []byte) ([]byte, error) {
-	alg, err := rootcrypto.NormalizeAlgorithm(algorithm)
-	if err != nil {
-		return nil, err
-	}
-	if alg == rootcrypto.AlgorithmDES || alg == rootcrypto.Algorithm3DES {
+func Encrypt(algorithm rootcrypto.Algorithm, key []byte, plaintext []byte) ([]byte, error) {
+	if algorithm == rootcrypto.DES || algorithm == rootcrypto.TripleDES {
 		return nil, errGcx1DESNotSupported
 	}
-	algID, ok := algorithmIDMap[alg]
+	algID, ok := algorithmIDMap[algorithm]
 	if !ok {
-		return nil, fmt.Errorf("gcx1: 算法 %s 无对应 algID", alg)
+		return nil, fmt.Errorf("gcx1: 不支持的算法: %s", algorithm)
 	}
 
-	c, err := rootcrypto.NewCipher(alg, key)
+	c, err := rootcrypto.NewCipher(algorithm.String(), key)
 	if err != nil {
 		return nil, err
 	}
@@ -117,20 +113,16 @@ func Encrypt(algorithm string, key []byte, plaintext []byte) ([]byte, error) {
 // EncryptWithAAD 使用指定算法和密钥加密明文，同时附加 AAD（额外认证数据）。
 // AAD 不入信封，由调用方在解密时提供相同值。
 // 输出 v2 信封：AAD = header 元数据 || 调用方 AAD。
-func EncryptWithAAD(algorithm string, key []byte, plaintext, aad []byte) ([]byte, error) {
-	alg, err := rootcrypto.NormalizeAlgorithm(algorithm)
-	if err != nil {
-		return nil, err
-	}
-	if alg == rootcrypto.AlgorithmDES || alg == rootcrypto.Algorithm3DES {
+func EncryptWithAAD(algorithm rootcrypto.Algorithm, key []byte, plaintext, aad []byte) ([]byte, error) {
+	if algorithm == rootcrypto.DES || algorithm == rootcrypto.TripleDES {
 		return nil, errGcx1DESNotSupported
 	}
-	algID, ok := algorithmIDMap[alg]
+	algID, ok := algorithmIDMap[algorithm]
 	if !ok {
-		return nil, fmt.Errorf("gcx1: 算法 %s 无对应 algID", alg)
+		return nil, fmt.Errorf("gcx1: 不支持的算法: %s", algorithm)
 	}
 
-	c, err := rootcrypto.NewCipher(alg, key)
+	c, err := rootcrypto.NewCipher(algorithm.String(), key)
 	if err != nil {
 		return nil, err
 	}
@@ -200,14 +192,14 @@ func decryptInternal(key, envelope, aad []byte) ([]byte, error) {
 	if !ok {
 		return nil, errGcx1UnknownAlgID
 	}
-	if alg == rootcrypto.AlgorithmDES || alg == rootcrypto.Algorithm3DES {
+	if alg == rootcrypto.DES || alg == rootcrypto.TripleDES {
 		return nil, errGcx1DESNotSupported
 	}
 
 	nonce := envelope[gcx1HeaderLen : gcx1HeaderLen+gcx1NonceLen]
 	ciphertext := envelope[gcx1HeaderLen+gcx1NonceLen:]
 
-	c, err := rootcrypto.NewCipher(alg, key)
+	c, err := rootcrypto.NewCipher(alg.String(), key)
 	if err != nil {
 		return nil, err
 	}

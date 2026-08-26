@@ -30,7 +30,7 @@ type EnvelopeCodec interface {
 	// Name 返回注册名，须匹配 ^[a-z][a-z0-9-]{0,63}$，且不得与保留名冲突。
 	Name() string
 	// Encrypt 使用指定算法（已归一化）与密钥加密明文，输出本格式信封。
-	Encrypt(algorithm string, key []byte, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error)
+	Encrypt(algorithm rootcrypto.Algorithm, key []byte, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error)
 	// Decrypt 解密本格式信封，返回明文。
 	Decrypt(key []byte, envelope []byte, opts ...rootcrypto.Option) ([]byte, error)
 }
@@ -117,16 +117,12 @@ func EnvelopeCodecs() []string {
 
 // EncryptWith 通过指定 codec 加密明文。codec 未注册返回
 // ErrUnknownEnvelopeCodec；算法名先经 NormalizeAlgorithm 归一化（失败透传）。
-func EncryptWith(codecName, algorithm string, key, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error) {
+func EncryptWith(codecName string, algorithm rootcrypto.Algorithm, key, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error) {
 	codec, err := EnvelopeCodecByName(codecName)
 	if err != nil {
 		return nil, err
 	}
-	alg, err := rootcrypto.NormalizeAlgorithm(algorithm)
-	if err != nil {
-		return nil, err
-	}
-	return codec.Encrypt(alg, key, plaintext, opts...)
+	return codec.Encrypt(algorithm, key, plaintext, opts...)
 }
 
 // DecryptWith 通过指定 codec 解密信封。codec 未注册返回
@@ -170,7 +166,7 @@ func (gcx1Codec) Name() string { return EnvelopeCodecGCX1 }
 // 选项处理约定（文档化行为）：gcx1 固定使用 GCM 认证加密，仅 AAD 选项
 // （WithAAD）生效，其余选项（如 WithPadding/WithIV 等非 GCM 选项）一律
 // 静默忽略，不报错也不影响输出。调用方不应依赖被忽略选项产生任何效果。
-func (gcx1Codec) Encrypt(algorithm string, key []byte, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error) {
+func (gcx1Codec) Encrypt(algorithm rootcrypto.Algorithm, key []byte, plaintext []byte, opts ...rootcrypto.Option) ([]byte, error) {
 	aad := rootcrypto.AADFromOptions(opts...)
 	if len(aad) > 0 {
 		return EncryptWithAAD(algorithm, key, plaintext, aad)
