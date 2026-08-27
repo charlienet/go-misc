@@ -49,13 +49,13 @@ func TestXXHashUint64(t *testing.T) {
 	assert.NotEqual(t, uint64(0), result)
 }
 
-func TestFunv32(t *testing.T) {
-	result := Funv32([]byte("hello"))
+func TestFnv32(t *testing.T) {
+	result := Fnv32([]byte("hello"))
 	assert.NotEqual(t, uint32(0), result)
 }
 
-func TestFunv64(t *testing.T) {
-	result := Funv64([]byte("hello"))
+func TestFnv64(t *testing.T) {
+	result := Fnv64([]byte("hello"))
 	assert.NotEqual(t, uint64(0), result)
 }
 
@@ -72,9 +72,13 @@ func TestByName(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, f)
 
-	// 测试不支持的哈希函数
+	// 测试不支持的哈希函数：错误消息须包含支持列表（P2 改进）
 	_, err = ByName("INVALID")
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported hash function")
+	assert.Contains(t, err.Error(), `"INVALID"`)
+	assert.Contains(t, err.Error(), "supported:")
+	assert.Contains(t, err.Error(), "sha256")
 }
 
 func TestHashComparer(t *testing.T) {
@@ -90,6 +94,28 @@ func TestHashComparer(t *testing.T) {
 
 	// 验证错误消息
 	assert.False(t, c.Verify([]byte("wrong"), sign))
+}
+
+func TestHashComparer_VerifyConstantTime(t *testing.T) {
+	c, err := New("MD5")
+	assert.NoError(t, err)
+
+	msg := []byte("hello")
+	sign, err := c.Sign(msg)
+	assert.NoError(t, err)
+
+	// 正确摘要返回 true
+	assert.True(t, c.Verify(msg, sign))
+
+	// 错误摘要返回 false
+	wrongSign := make([]byte, len(sign))
+	copy(wrongSign, sign)
+	wrongSign[0] ^= 0xff
+	assert.False(t, c.Verify(msg, wrongSign))
+
+	// 长度不等的 target 返回 false
+	assert.False(t, c.Verify(msg, sign[:len(sign)-1]))
+	assert.False(t, c.Verify(msg, append(append([]byte{}, sign...), 0x00)))
 }
 
 func TestHash_EmptyInput(t *testing.T) {

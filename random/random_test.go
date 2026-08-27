@@ -49,14 +49,7 @@ func TestRandBytes(t *testing.T) {
 	assert.False(t, allZero, "random bytes should not be all zeros")
 }
 
-func TestFastGenerator(t *testing.T) {
-	// 测试 FastGenerator
-	for i := 0; i < 100; i++ {
-		n := FastGenerator.Intn(100)
-		assert.GreaterOrEqual(t, n, 0)
-		assert.Less(t, n, 100)
-	}
-}
+
 
 func TestSecureGenerator(t *testing.T) {
 	// 测试 SecureGenerator
@@ -109,11 +102,7 @@ func TestStringScope_NoConsecutiveDuplicates(t *testing.T) {
 	assert.Len(t, s, 100)
 }
 
-func BenchmarkFastRandIntn(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		FastGenerator.Intn(100)
-	}
-}
+
 
 func BenchmarkSecureRandIntn(b *testing.B) {
 	for i := 0; i < b.N; i++ {

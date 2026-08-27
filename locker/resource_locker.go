@@ -1,7 +1,6 @@
 package locker
 
 import (
-	"errors"
 	"sync"
 )
 
@@ -45,10 +44,11 @@ func (rl *ResourceLocker) Lock(key string) {
 	entryPtr.mu.Lock()
 }
 
-func (rl *ResourceLocker) Unlock(key string) error {
+func (rl *ResourceLocker) Unlock(key string) {
 	entry, exists := rl.locks.Load(key)
 	if !exists {
-		return errors.New("unlocking a non-locked resource")
+		// 如果尝试解锁一个不存在的资源，则静默返回
+		return
 	}
 
 	entryPtr := entry.(*lockEntry)
@@ -63,8 +63,6 @@ func (rl *ResourceLocker) Unlock(key string) error {
 		entryPtr.refCount = 0
 		rl.pool.Put(entry)
 	}
-
-	return nil
 }
 
 func (rl *ResourceLocker) TryLock(key string) bool {

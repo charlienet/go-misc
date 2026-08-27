@@ -2,20 +2,20 @@ package compiledbuffer
 
 import "sync"
 
-type compiledbuffer[T any] struct {
+type CompiledBuffer[T any] struct {
 	buf         map[string]T
 	compileFunc func(string) (T, error)
 	mu          sync.RWMutex
 }
 
-func NewCompiledBuffer[T any](fn func(string) (T, error)) *compiledbuffer[T] {
-	return &compiledbuffer[T]{
+func NewCompiledBuffer[T any](fn func(string) (T, error)) *CompiledBuffer[T] {
+	return &CompiledBuffer[T]{
 		buf:         make(map[string]T),
 		compileFunc: fn,
 	}
 }
 
-func (x *compiledbuffer[T]) Put(s string) (T, error) {
+func (x *CompiledBuffer[T]) Put(s string) (T, error) {
 	p, err := x.compileFunc(s)
 	if err != nil {
 		return p, err
@@ -28,7 +28,7 @@ func (x *compiledbuffer[T]) Put(s string) (T, error) {
 	return p, nil
 }
 
-func (x *compiledbuffer[T]) Get(s string) (T, error) {
+func (x *CompiledBuffer[T]) Get(s string) (T, error) {
 	x.mu.RLock()
 	if p, ok := x.buf[s]; ok {
 		x.mu.RUnlock()
@@ -39,7 +39,7 @@ func (x *compiledbuffer[T]) Get(s string) (T, error) {
 	return x.Put(s)
 }
 
-func (x *compiledbuffer[T]) Clear() {
+func (x *CompiledBuffer[T]) Clear() {
 	x.mu.Lock()
 	x.buf = make(map[string]T)
 	x.mu.Unlock()

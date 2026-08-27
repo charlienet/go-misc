@@ -6,8 +6,7 @@ import (
 )
 
 var (
-	rng             = &fastRandGenerator{}
-	FastGenerator   = &fastRandGenerator{}
+	rng             = NormalGenerator
 	SecureGenerator = &secureRandGenerator{}
 	NormalGenerator = NewRandGenerator()
 )

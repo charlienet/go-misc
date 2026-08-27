@@ -80,6 +80,10 @@ func TestHashComparer_SignVerify(t *testing.T) {
 	copy(wrongSign, sign)
 	wrongSign[0] ^= 0xff
 	assert.False(t, c.Verify(msg, wrongSign))
+
+	// 验证长度不等的签名
+	assert.False(t, c.Verify(msg, sign[:len(sign)-1]))
+	assert.False(t, c.Verify(msg, append(append([]byte{}, sign...), 0x00)))
 }
 
 func TestHashComparer_DifferentKeys(t *testing.T) {

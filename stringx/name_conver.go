@@ -3,10 +3,10 @@ package stringx
 import (
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/charlienet/go-misc/bytesconv"
 	"github.com/charlienet/go-misc/internal/maps"
-	"github.com/charlienet/go-misc/pool"
 )
 
 // CamelCase 		userName
@@ -180,9 +180,11 @@ func toLower(s byte) byte {
 	return s
 }
 
-var p = pool.New(10, func() []string {
-	return make([]string, 8)
-})
+var p = sync.Pool{
+	New: func() any {
+		return make([]string, 8)
+	},
+}
 
 func splitByCapital(s string) []string {
 	count := countCapital(s) + 1
@@ -192,11 +194,11 @@ func splitByCapital(s string) []string {
 
 	// a := make([]string, count)
 
-	a := p.Get()
+	a := p.Get().([]string)
 	defer p.Put(a)
 
-	if cap(a) <= count {
-		a = slices.Grow(a, count)
+	if cap(a) < count {
+		a = slices.Grow(a, count-cap(a))
 	}
 
 	i, n, last := 1, 0, 0

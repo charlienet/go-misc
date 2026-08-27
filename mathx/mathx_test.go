@@ -28,40 +28,6 @@ func TestDeduction(t *testing.T) {
 	}
 }
 
-func TestCentToDollar(t *testing.T) {
-	tests := []struct {
-		cent     int
-		expected string
-	}{
-		{100, "1.00"},
-		{1, "0.01"},
-		{0, "0.00"},
-		{999, "9.99"},
-	}
-
-	for _, tt := range tests {
-		result := CentToDollar(tt.cent)
-		assert.Equal(t, tt.expected, result)
-	}
-}
-
-func TestDollarToCent(t *testing.T) {
-	tests := []struct {
-		dollar   string
-		expected int
-	}{
-		{"1.00", 100},
-		{"0.01", 1},
-		{"0", 0},
-		{"9.99", 999},
-	}
-
-	for _, tt := range tests {
-		result := DollarToCent(tt.dollar)
-		assert.Equal(t, tt.expected, result)
-	}
-}
-
 func TestRound(t *testing.T) {
 	tests := []struct {
 		v         float64

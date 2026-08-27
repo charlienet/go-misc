@@ -91,8 +91,8 @@ func TestResourceLocker_TryLock(t *testing.T) {
 func TestResourceLocker_UnlockNonExistent(t *testing.T) {
 	rl := NewResourceLocker()
 
-	err := rl.Unlock("nonexistent")
-	assert.Error(t, err)
+	// 解锁不存在的资源不应导致 panic 或错误
+	rl.Unlock("nonexistent") // 应该静默返回
 }
 
 func TestChanSourceLocker_Basic(t *testing.T) {
